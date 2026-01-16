@@ -81,7 +81,6 @@ router.post('/google-signin', async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        username: user.username,
         balance: user.balance,
         createdAt: user.createdAt
       }
@@ -314,7 +313,6 @@ router.get('/user', verifyToken, async (req, res) => {
       user: {
         id: user._id,
         firebaseUid: user.firebaseUid,
-        username: user.username,
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
