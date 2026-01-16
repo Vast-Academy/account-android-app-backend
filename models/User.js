@@ -31,6 +31,23 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  mobile: {
+    type: String,
+    default: null
+  },
+  dob: {
+    type: Date,
+    default: null
+  },
+  gender: {
+    type: String,
+    enum: ['Male', 'Female', 'Other'],
+    default: null
+  },
+  occupation: {
+    type: String,
+    default: null
+  },
   balance: {
     type: Number,
     default: 0

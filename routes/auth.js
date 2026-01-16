@@ -352,4 +352,81 @@ router.post('/logout', verifyToken, async (req, res) => {
   }
 });
 
+// 7. Update Profile
+router.put('/update-profile', async (req, res) => {
+  try {
+    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete } = req.body;
+
+    // Validation
+    if (!firebaseUid || !displayName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Firebase UID and display name are required'
+      });
+    }
+
+    // Validate display name
+    if (displayName.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Display name must be at least 2 characters'
+      });
+    }
+
+    // Validate mobile number if provided
+    if (mobile && !/^\d{10}$/.test(mobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mobile number must be 10 digits'
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ firebaseUid });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update fields
+    user.displayName = displayName.trim();
+    if (mobile) user.mobile = mobile;
+    if (dob) user.dob = new Date(dob);
+    if (gender) user.gender = gender;
+    if (occupation) user.occupation = occupation;
+    if (setupComplete !== undefined) user.setupComplete = setupComplete;
+
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        firebaseUid: user.firebaseUid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+        mobile: user.mobile,
+        dob: user.dob,
+        gender: user.gender,
+        occupation: user.occupation,
+        setupComplete: user.setupComplete,
+        balance: user.balance,
+        createdAt: user.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Update Profile Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update profile',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
