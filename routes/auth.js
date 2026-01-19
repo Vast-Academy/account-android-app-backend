@@ -61,7 +61,6 @@ router.post('/google-signin', async (req, res) => {
         email: email,
         displayName: name || email.split('@')[0],
         photoURL: picture || null,
-        balance: 0,
         setupComplete: false,
         googleDriveConnected: true
       });
@@ -81,7 +80,10 @@ router.post('/google-signin', async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        balance: user.balance,
+        mobile: user.mobile,
+        gender: user.gender,
+        occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         createdAt: user.createdAt
       }
     });
@@ -210,8 +212,7 @@ router.post('/complete-setup', async (req, res) => {
         username: user.username,
         email: user.email,
         displayName: user.displayName,
-        photoURL: user.photoURL,
-        balance: user.balance
+        photoURL: user.photoURL
       }
     });
 
@@ -281,7 +282,10 @@ router.post('/login', async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        balance: user.balance,
+        mobile: user.mobile,
+        gender: user.gender,
+        occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         createdAt: user.createdAt
       }
     });
@@ -316,7 +320,10 @@ router.get('/user', verifyToken, async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        balance: user.balance,
+        mobile: user.mobile,
+        gender: user.gender,
+        occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         setupComplete: user.setupComplete,
         googleDriveConnected: user.googleDriveConnected,
         createdAt: user.createdAt
@@ -353,7 +360,7 @@ router.post('/logout', verifyToken, async (req, res) => {
 // 7. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete } = req.body;
+    const { firebaseUid, displayName, mobile, gender, occupation, currencySymbol, setupComplete } = req.body;
 
     // Validation
     if (!firebaseUid || !displayName) {
@@ -391,9 +398,9 @@ router.put('/update-profile', async (req, res) => {
     // Update fields
     user.displayName = displayName.trim();
     if (mobile) user.mobile = mobile;
-    if (dob) user.dob = new Date(dob);
     if (gender) user.gender = gender;
     if (occupation) user.occupation = occupation;
+    if (currencySymbol) user.currencySymbol = currencySymbol;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
 
     await user.save();
@@ -408,11 +415,10 @@ router.put('/update-profile', async (req, res) => {
         displayName: user.displayName,
         photoURL: user.photoURL,
         mobile: user.mobile,
-        dob: user.dob,
         gender: user.gender,
         occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         setupComplete: user.setupComplete,
-        balance: user.balance,
         createdAt: user.createdAt
       }
     });

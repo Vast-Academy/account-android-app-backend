@@ -24,10 +24,6 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  dob: {
-    type: Date,
-    default: null
-  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
@@ -37,9 +33,9 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  balance: {
-    type: Number,
-    default: 0
+  currencySymbol: {
+    type: String,
+    default: null
   },
   setupComplete: {
     type: Boolean,
