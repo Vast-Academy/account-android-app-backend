@@ -280,7 +280,7 @@ router.post('/logout', verifyToken, async (req, res) => {
 // 7. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, gender, occupation, currencySymbol, setupComplete } = req.body;
+    const { firebaseUid, displayName, mobile, username, gender, occupation, currencySymbol, setupComplete } = req.body;
 
     // Validation
     if (!firebaseUid || !displayName) {
@@ -306,6 +306,31 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
+    // Validate username format if provided
+    if (username && !validateUsername(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
+      });
+    }
+
+    // Check if username is available (if trying to set new username)
+    if (username) {
+      const existingUser = await User.findOne({
+        username: username.toLowerCase(),
+        firebaseUid: { $ne: firebaseUid } // Allow current user to keep same username
+      });
+
+      if (existingUser) {
+        const suggestions = await generateUsernameSuggestions(username);
+        return res.status(400).json({
+          success: false,
+          message: 'Username already taken',
+          suggestions: suggestions
+        });
+      }
+    }
+
     // Find user
     const user = await User.findOne({ firebaseUid });
     if (!user) {
@@ -318,6 +343,7 @@ router.put('/update-profile', async (req, res) => {
     // Update fields
     user.displayName = displayName.trim();
     if (mobile) user.mobile = mobile;
+    if (username) user.username = username.toLowerCase();
     if (gender) user.gender = gender;
     if (occupation) user.occupation = occupation;
     if (currencySymbol) user.currencySymbol = currencySymbol;
@@ -333,6 +359,7 @@ router.put('/update-profile', async (req, res) => {
         firebaseUid: user.firebaseUid,
         email: user.email,
         displayName: user.displayName,
+        username: user.username,
         photoURL: user.photoURL,
         mobile: user.mobile,
         gender: user.gender,
