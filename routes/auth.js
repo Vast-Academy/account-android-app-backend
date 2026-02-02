@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
@@ -152,12 +151,12 @@ router.post('/check-username', async (req, res) => {
 // 3. Complete Setup (After Google Sign-In)
 router.post('/complete-setup', async (req, res) => {
   try {
-    const { firebaseUid, username, password } = req.body;
+    const { firebaseUid, username } = req.body;
 
-    if (!firebaseUid || !username || !password) {
+    if (!firebaseUid || !username) {
       return res.status(400).json({
         success: false,
-        message: 'Firebase UID, username, and password are required'
+        message: 'Firebase UID and username are required'
       });
     }
 
@@ -193,13 +192,8 @@ router.post('/complete-setup', async (req, res) => {
       });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
     // Update user
     user.username = username.toLowerCase();
-    user.password = hashedPassword;
     user.setupComplete = true;
     await user.save();
 
@@ -226,81 +220,7 @@ router.post('/complete-setup', async (req, res) => {
   }
 });
 
-// 4. Username/Password Login
-router.post('/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username and password are required'
-      });
-    }
-
-    // Find user by username (case-insensitive)
-    const user = await User.findOne({
-      username: username.toLowerCase()
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
-    }
-
-    // Check if user has completed setup
-    if (!user.setupComplete || !user.password) {
-      return res.status(401).json({
-        success: false,
-        message: 'Please complete setup first using Google Sign-In'
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
-    }
-
-    // Update last login
-    user.lastLogin = Date.now();
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        mobile: user.mobile,
-        gender: user.gender,
-        occupation: user.occupation,
-        currencySymbol: user.currencySymbol,
-        createdAt: user.createdAt
-      }
-    });
-
-  } catch (error) {
-    console.error('Login Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Login failed',
-      error: error.message
-    });
-  }
-});
-
-// 5. Get Current User Details
+// 4. Get Current User Details
 router.get('/user', verifyToken, async (req, res) => {
   try {
     const user = await User.findOne({ firebaseUid: req.user.uid });
@@ -360,7 +280,7 @@ router.post('/logout', verifyToken, async (req, res) => {
 // 7. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, gender, occupation, currencySymbol, setupComplete } = req.body;
+    const { firebaseUid, displayName, mobile, username, gender, occupation, currencySymbol, setupComplete } = req.body;
 
     // Validation
     if (!firebaseUid || !displayName) {
@@ -386,6 +306,31 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
+    // Validate username format if provided
+    if (username && !validateUsername(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
+      });
+    }
+
+    // Check if username is available (if trying to set new username)
+    if (username) {
+      const existingUser = await User.findOne({
+        username: username.toLowerCase(),
+        firebaseUid: { $ne: firebaseUid } // Allow current user to keep same username
+      });
+
+      if (existingUser) {
+        const suggestions = await generateUsernameSuggestions(username);
+        return res.status(400).json({
+          success: false,
+          message: 'Username already taken',
+          suggestions: suggestions
+        });
+      }
+    }
+
     // Find user
     const user = await User.findOne({ firebaseUid });
     if (!user) {
@@ -398,6 +343,7 @@ router.put('/update-profile', async (req, res) => {
     // Update fields
     user.displayName = displayName.trim();
     if (mobile) user.mobile = mobile;
+    if (username) user.username = username.toLowerCase();
     if (gender) user.gender = gender;
     if (occupation) user.occupation = occupation;
     if (currencySymbol) user.currencySymbol = currencySymbol;
@@ -413,6 +359,7 @@ router.put('/update-profile', async (req, res) => {
         firebaseUid: user.firebaseUid,
         email: user.email,
         displayName: user.displayName,
+        username: user.username,
         photoURL: user.photoURL,
         mobile: user.mobile,
         gender: user.gender,

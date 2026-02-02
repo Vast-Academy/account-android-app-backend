@@ -59,15 +59,11 @@ const userSchema = new mongoose.Schema({
     lowercase: true,
     sparse: true
   },
-  bio: {
-    type: String,
-    default: null
-  },
   searchableTerms: {
     type: [String],
     default: []
   },
-  fcmToken: {
+  tumneToken: {
     type: String,
     default: null
   },
@@ -92,10 +88,6 @@ const userSchema = new mongoose.Schema({
       type: Boolean,
       default: true
     }
-  },
-  password: {
-    type: String,
-    default: null
   }
 });
 

@@ -24,12 +24,6 @@ const generateSearchTerms = (userData) => {
     terms.push(userData.mobile);
   }
 
-  // Bio keywords
-  if (userData.bio) {
-    const bioWords = userData.bio.toLowerCase().split(' ').filter(w => w.length > 3);
-    terms.push(...bioWords.slice(0, 5));
-  }
-
   return [...new Set(terms)]; // Remove duplicates
 };
 
@@ -37,7 +31,7 @@ const generateSearchTerms = (userData) => {
 router.post('/sync-profile', verifyToken, async (req, res) => {
   try {
     const firebaseUid = req.user.uid;
-    const { username, displayName, mobile, email, photoURL, bio, fcmToken } = req.body;
+    const { username, displayName, mobile, email, photoURL, fcmToken } = req.body;
 
     // Validate username format
     if (username && !/^[a-zA-Z0-9._-]+$/.test(username)) {
@@ -92,7 +86,6 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
         mobile: user.mobile,
         email: user.email,
         photoURL: user.photoURL,
-        bio: user.bio,
         fcmToken: user.fcmToken
       }
     });
@@ -141,8 +134,7 @@ router.post('/search', verifyToken, async (req, res) => {
         userId: user.firebaseUid,
         username: user.username,
         displayName: user.displayName,
-        photoURL: user.photoURL,
-        bio: user.bio
+        photoURL: user.photoURL
       };
 
       // Only include phone if privacy allows
@@ -197,8 +189,7 @@ router.get('/by-username/:username', verifyToken, async (req, res) => {
       userId: user.firebaseUid,
       username: user.username,
       displayName: user.displayName,
-      photoURL: user.photoURL,
-      bio: user.bio
+      photoURL: user.photoURL
     };
 
     if (user.privacy?.phoneNumberVisible) {
@@ -250,7 +241,6 @@ router.get('/:userId/profile', verifyToken, async (req, res) => {
       username: user.username,
       displayName: user.displayName,
       photoURL: user.photoURL,
-      bio: user.bio,
       isOnline: user.isOnline
     };
 
