@@ -52,7 +52,56 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
     default: Date.now
+  },
+  // Chat Feature Fields
+  username: {
+    type: String,
+    lowercase: true,
+    sparse: true
+  },
+  bio: {
+    type: String,
+    default: null
+  },
+  searchableTerms: {
+    type: [String],
+    default: []
+  },
+  fcmToken: {
+    type: String,
+    default: null
+  },
+  isOnline: {
+    type: Boolean,
+    default: false
+  },
+  lastOnline: {
+    type: Date,
+    default: Date.now
+  },
+  privacy: {
+    phoneNumberVisible: {
+      type: Boolean,
+      default: true
+    },
+    lastSeenVisible: {
+      type: Boolean,
+      default: true
+    },
+    profilePhotoVisible: {
+      type: Boolean,
+      default: true
+    }
+  },
+  password: {
+    type: String,
+    default: null
   }
 });
+
+// Create indexes for chat search
+userSchema.index({ username: 1 });
+userSchema.index({ searchableTerms: 1 });
+userSchema.index({ phoneNumber: 1 });
 
 module.exports = mongoose.model('User', userSchema);
