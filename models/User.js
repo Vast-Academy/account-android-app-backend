@@ -63,7 +63,7 @@ const userSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
-  tumneToken: {
+  fcmToken: {
     type: String,
     default: null
   },
