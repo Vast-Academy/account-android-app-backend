@@ -45,29 +45,23 @@ router.post('/send', verifyToken, async (req, res) => {
       });
     }
 
+    const conversationId = [senderId, receiverId].sort().join('_');
+
     // Prepare FCM message
     const fcmMessage = {
       token: receiver.fcmToken,
       data: {
         type: 'chat_message',
         messageId,
-        conversationId: `${senderId}_${receiverId}`,
+        conversationId,
         senderId,
         senderName: sender.displayName,
         messageText: messageText.substring(0, 100), // Limit preview
         messageType: messageType || 'text',
         timestamp: timestamp.toString()
       },
-      notification: {
-        title: sender.displayName,
-        body: messageText.substring(0, 100)
-      },
       android: {
-        priority: 'high',
-        notification: {
-          sound: 'default',
-          channelId: 'chat_messages'
-        }
+        priority: 'high'
       },
       apns: {
         headers: {
