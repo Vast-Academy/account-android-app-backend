@@ -31,9 +31,7 @@ const generateSearchTerms = (userData) => {
 router.post('/sync-profile', verifyToken, async (req, res) => {
   try {
     const firebaseUid = req.user.uid;
-    const { username, displayName, mobile, phoneNumber, email, photoURL, fcmToken, bio } = req.body;
-
-    const normalizedMobile = mobile || phoneNumber || '';
+    const { username, displayName, mobile, email, photoURL, fcmToken } = req.body;
 
     // Validate username format
     if (username && !/^[a-zA-Z0-9._-]+$/.test(username)) {
@@ -53,7 +51,7 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
     }
 
     // Generate searchable terms
-    const searchableTerms = generateSearchTerms({ username, displayName, mobile: normalizedMobile, bio });
+    const searchableTerms = generateSearchTerms({ username, displayName, mobile, bio });
 
     // Update or create user
     const user = await User.findOneAndUpdate(
@@ -61,7 +59,7 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
       {
         username: username?.toLowerCase(),
         displayName,
-        mobile: normalizedMobile,
+        mobile,
         email,
         photoURL,
         bio,

@@ -45,15 +45,13 @@ router.post('/send', verifyToken, async (req, res) => {
       });
     }
 
-    const conversationId = [senderId, receiverId].sort().join('_');
-
     // Prepare FCM message
     const fcmMessage = {
       token: receiver.fcmToken,
       data: {
         type: 'chat_message',
         messageId,
-        conversationId,
+        conversationId: `${senderId}_${receiverId}`,
         senderId,
         senderName: sender.displayName,
         messageText: messageText.substring(0, 100), // Limit preview

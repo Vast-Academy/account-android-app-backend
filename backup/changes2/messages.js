@@ -60,16 +60,8 @@ router.post('/send', verifyToken, async (req, res) => {
         messageType: messageType || 'text',
         timestamp: timestamp.toString()
       },
-      notification: {
-        title: sender.displayName,
-        body: messageText.substring(0, 100)
-      },
       android: {
-        priority: 'high',
-        notification: {
-          sound: 'default',
-          channelId: 'chat_messages'
-        }
+        priority: 'high'
       },
       apns: {
         headers: {
