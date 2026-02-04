@@ -103,9 +103,10 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Create indexes for chat search
+// Create indexes for chat search and batch operations
 userSchema.index({ username: 1 });
 userSchema.index({ searchableTerms: 1 });
-userSchema.index({ phoneNumber: 1 });
+userSchema.index({ mobile: 1 }); // Fixed: Use 'mobile' field for phone number lookups
+userSchema.index({ internationalPhone: 1 }); // Add index for international phone format
 
 module.exports = mongoose.model('User', userSchema);

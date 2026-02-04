@@ -268,7 +268,100 @@ router.get('/:userId/profile', verifyToken, async (req, res) => {
   }
 });
 
-// 5. Update FCM Token
+// 5. Batch Search Users by Phone Numbers (WhatsApp-style)
+router.post('/batch-search', verifyToken, async (req, res) => {
+  try {
+    const { phoneNumbers } = req.body;
+
+    // Validate input
+    if (!phoneNumbers || !Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone numbers array is required'
+      });
+    }
+
+    // Limit batch size to prevent abuse (max 2000 contacts)
+    if (phoneNumbers.length > 2000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Maximum 2000 phone numbers allowed per batch'
+      });
+    }
+
+    // Clean and normalize phone numbers (remove non-digits, keep last 10 digits)
+    const cleanedPhones = phoneNumbers.map(phone => {
+      const cleaned = String(phone).replace(/\D/g, '');
+      return cleaned.slice(-10); // Get last 10 digits
+    }).filter(phone => phone.length === 10); // Only keep valid 10-digit numbers
+
+    if (cleanedPhones.length === 0) {
+      return res.status(200).json({
+        success: true,
+        users: {}
+      });
+    }
+
+    // Single database query using $in operator - finds all matching users at once
+    const users = await User.find({
+      $or: [
+        { mobile: { $in: cleanedPhones } },
+        {
+          mobile: {
+            $in: cleanedPhones.map(phone => `+91${phone}`) // Also check with country code
+          }
+        }
+      ],
+      setupComplete: true
+    })
+    .select('_id firebaseUid username displayName photoURL mobile privacy')
+    .lean();
+
+    // Build hash map for O(1) lookup: { "9876543210": userData, ... }
+    const userMap = {};
+
+    users.forEach(user => {
+      // Extract clean phone number (last 10 digits)
+      const cleanPhone = user.mobile ? user.mobile.replace(/\D/g, '').slice(-10) : null;
+
+      if (cleanPhone && cleanPhone.length === 10) {
+        // Apply privacy settings
+        const userData = {
+          id: user._id,
+          userId: user.firebaseUid,
+          username: user.username,
+          displayName: user.displayName,
+          photoURL: user.photoURL,
+          isAppUser: true
+        };
+
+        // Only include phone if privacy allows
+        if (user.privacy?.phoneNumberVisible) {
+          userData.mobile = user.mobile;
+        }
+
+        // Store in map using clean phone as key
+        userMap[cleanPhone] = userData;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      users: userMap,
+      totalRequested: phoneNumbers.length,
+      totalFound: Object.keys(userMap).length
+    });
+  } catch (error) {
+    console.error('Batch Search Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Batch search failed',
+      error: error.message
+    });
+  }
+});
+
+// 6. Update FCM Token
 router.post('/update-fcm-token', verifyToken, async (req, res) => {
   try {
     const firebaseUid = req.user.uid;
