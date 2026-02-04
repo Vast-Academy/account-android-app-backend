@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { validateInternationalPhone, getCountryDialCode } = require('../utils/phoneValidation');
 
 // Helper function to validate username
 const validateUsername = (username) => {
@@ -278,15 +279,18 @@ router.post('/logout', verifyToken, async (req, res) => {
 });
 
 // 7. Update Profile
-router.put('/update-profile', async (req, res) => {
+router.put('/update-profile', verifyToken, async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, username, gender, occupation, currencySymbol, setupComplete } = req.body;
+    const { displayName, mobile, username, gender, occupation, currency, country, setupComplete } = req.body;
+
+    // Get firebaseUid from verified token (NOT from request body)
+    const firebaseUid = req.user.uid;
 
     // Validation
-    if (!firebaseUid || !displayName) {
+    if (!displayName) {
       return res.status(400).json({
         success: false,
-        message: 'Firebase UID and display name are required'
+        message: 'Display name is required'
       });
     }
 
@@ -298,11 +302,34 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
-    // Validate mobile number if provided
-    if (mobile && !/^\d{10}$/.test(mobile)) {
+    // Valid countries list
+    const validCountries = ['IN', 'US', 'GB', 'CA', 'AU', 'DE', 'FR', 'JP', 'CN', 'BR', 'MX', 'IT', 'ES', 'NZ', 'SG', 'HK', 'AE', 'ZA', 'RU'];
+
+    // Validate country if provided
+    if (country && !validCountries.includes(country)) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number must be 10 digits'
+        message: 'Invalid country code'
+      });
+    }
+
+    // Validate and parse phone number if provided
+    let phoneData = null;
+    if (mobile && country) {
+      const phoneValidation = validateInternationalPhone(mobile, country);
+
+      if (!phoneValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: phoneValidation.error
+        });
+      }
+
+      phoneData = phoneValidation.data;
+    } else if (mobile && !country) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country is required to validate phone number'
       });
     }
 
@@ -318,7 +345,7 @@ router.put('/update-profile', async (req, res) => {
     if (username) {
       const existingUser = await User.findOne({
         username: username.toLowerCase(),
-        firebaseUid: { $ne: firebaseUid } // Allow current user to keep same username
+        firebaseUid: { $ne: firebaseUid }
       });
 
       if (existingUser) {
@@ -342,12 +369,36 @@ router.put('/update-profile', async (req, res) => {
 
     // Update fields
     user.displayName = displayName.trim();
-    if (mobile) user.mobile = mobile;
-    if (username) user.username = username.toLowerCase();
-    if (gender) user.gender = gender;
-    if (occupation) user.occupation = occupation;
-    if (currencySymbol) user.currencySymbol = currencySymbol;
-    if (setupComplete !== undefined) user.setupComplete = setupComplete;
+
+    if (mobile && phoneData) {
+      user.mobile = phoneData.nationalNumber;           // Local format: "9876543210"
+      user.internationalPhone = phoneData.e164Format;   // E.164: "+919876543210"
+      user.countryCode = phoneData.dialingCode;         // "+91"
+    }
+
+    if (country) {
+      user.country = country;
+    }
+
+    if (username) {
+      user.username = username.toLowerCase();
+    }
+
+    if (gender) {
+      user.gender = gender;
+    }
+
+    if (occupation) {
+      user.occupation = occupation;
+    }
+
+    if (currency) {
+      user.currencySymbol = currency;
+    }
+
+    if (setupComplete !== undefined) {
+      user.setupComplete = setupComplete;
+    }
 
     await user.save();
 
@@ -362,6 +413,9 @@ router.put('/update-profile', async (req, res) => {
         username: user.username,
         photoURL: user.photoURL,
         mobile: user.mobile,
+        country: user.country,
+        countryCode: user.countryCode,
+        internationalPhone: user.internationalPhone,
         gender: user.gender,
         occupation: user.occupation,
         currencySymbol: user.currencySymbol,

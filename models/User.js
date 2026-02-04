@@ -24,6 +24,18 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  country: {
+    type: String,
+    default: null
+  },
+  countryCode: {
+    type: String,
+    default: null
+  },
+  internationalPhone: {
+    type: String,
+    default: null
+  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
