@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { validateInternationalPhone, getCountryDialCode } = require('../utils/phoneValidation');
 
 // Helper function to validate username
 const validateUsername = (username) => {
@@ -61,7 +61,6 @@ router.post('/google-signin', async (req, res) => {
         email: email,
         displayName: name || email.split('@')[0],
         photoURL: picture || null,
-        balance: 0,
         setupComplete: false,
         googleDriveConnected: true
       });
@@ -81,8 +80,10 @@ router.post('/google-signin', async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        username: user.username,
-        balance: user.balance,
+        mobile: user.mobile,
+        gender: user.gender,
+        occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         createdAt: user.createdAt
       }
     });
@@ -151,12 +152,12 @@ router.post('/check-username', async (req, res) => {
 // 3. Complete Setup (After Google Sign-In)
 router.post('/complete-setup', async (req, res) => {
   try {
-    const { firebaseUid, username, password } = req.body;
+    const { firebaseUid, username } = req.body;
 
-    if (!firebaseUid || !username || !password) {
+    if (!firebaseUid || !username) {
       return res.status(400).json({
         success: false,
-        message: 'Firebase UID, username, and password are required'
+        message: 'Firebase UID and username are required'
       });
     }
 
@@ -192,13 +193,8 @@ router.post('/complete-setup', async (req, res) => {
       });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
     // Update user
     user.username = username.toLowerCase();
-    user.password = hashedPassword;
     user.setupComplete = true;
     await user.save();
 
@@ -211,8 +207,7 @@ router.post('/complete-setup', async (req, res) => {
         username: user.username,
         email: user.email,
         displayName: user.displayName,
-        photoURL: user.photoURL,
-        balance: user.balance
+        photoURL: user.photoURL
       }
     });
 
@@ -226,78 +221,7 @@ router.post('/complete-setup', async (req, res) => {
   }
 });
 
-// 4. Username/Password Login
-router.post('/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username and password are required'
-      });
-    }
-
-    // Find user by username (case-insensitive)
-    const user = await User.findOne({
-      username: username.toLowerCase()
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
-    }
-
-    // Check if user has completed setup
-    if (!user.setupComplete || !user.password) {
-      return res.status(401).json({
-        success: false,
-        message: 'Please complete setup first using Google Sign-In'
-      });
-    }
-
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
-    }
-
-    // Update last login
-    user.lastLogin = Date.now();
-    await user.save();
-
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        balance: user.balance,
-        createdAt: user.createdAt
-      }
-    });
-
-  } catch (error) {
-    console.error('Login Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Login failed',
-      error: error.message
-    });
-  }
-});
-
-// 5. Get Current User Details
+// 4. Get Current User Details
 router.get('/user', verifyToken, async (req, res) => {
   try {
     const user = await User.findOne({ firebaseUid: req.user.uid });
@@ -314,11 +238,13 @@ router.get('/user', verifyToken, async (req, res) => {
       user: {
         id: user._id,
         firebaseUid: user.firebaseUid,
-        username: user.username,
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
-        balance: user.balance,
+        mobile: user.mobile,
+        gender: user.gender,
+        occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         setupComplete: user.setupComplete,
         googleDriveConnected: user.googleDriveConnected,
         createdAt: user.createdAt
@@ -353,15 +279,18 @@ router.post('/logout', verifyToken, async (req, res) => {
 });
 
 // 7. Update Profile
-router.put('/update-profile', async (req, res) => {
+router.put('/update-profile', verifyToken, async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete } = req.body;
+    const { displayName, mobile, username, gender, occupation, currency, country, setupComplete } = req.body;
+
+    // Get firebaseUid from verified token (NOT from request body)
+    const firebaseUid = req.user.uid;
 
     // Validation
-    if (!firebaseUid || !displayName) {
+    if (!displayName) {
       return res.status(400).json({
         success: false,
-        message: 'Firebase UID and display name are required'
+        message: 'Display name is required'
       });
     }
 
@@ -373,12 +302,60 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
-    // Validate mobile number if provided
-    if (mobile && !/^\d{10}$/.test(mobile)) {
+    // Valid countries list
+    const validCountries = ['IN', 'US', 'GB', 'CA', 'AU', 'DE', 'FR', 'JP', 'CN', 'BR', 'MX', 'IT', 'ES', 'NZ', 'SG', 'HK', 'AE', 'ZA', 'RU'];
+
+    // Validate country if provided
+    if (country && !validCountries.includes(country)) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number must be 10 digits'
+        message: 'Invalid country code'
       });
+    }
+
+    // Validate and parse phone number if provided
+    let phoneData = null;
+    if (mobile && country) {
+      const phoneValidation = validateInternationalPhone(mobile, country);
+
+      if (!phoneValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: phoneValidation.error
+        });
+      }
+
+      phoneData = phoneValidation.data;
+    } else if (mobile && !country) {
+      return res.status(400).json({
+        success: false,
+        message: 'Country is required to validate phone number'
+      });
+    }
+
+    // Validate username format if provided
+    if (username && !validateUsername(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
+      });
+    }
+
+    // Check if username is available (if trying to set new username)
+    if (username) {
+      const existingUser = await User.findOne({
+        username: username.toLowerCase(),
+        firebaseUid: { $ne: firebaseUid }
+      });
+
+      if (existingUser) {
+        const suggestions = await generateUsernameSuggestions(username);
+        return res.status(400).json({
+          success: false,
+          message: 'Username already taken',
+          suggestions: suggestions
+        });
+      }
     }
 
     // Find user
@@ -392,11 +369,36 @@ router.put('/update-profile', async (req, res) => {
 
     // Update fields
     user.displayName = displayName.trim();
-    if (mobile) user.mobile = mobile;
-    if (dob) user.dob = new Date(dob);
-    if (gender) user.gender = gender;
-    if (occupation) user.occupation = occupation;
-    if (setupComplete !== undefined) user.setupComplete = setupComplete;
+
+    if (mobile && phoneData) {
+      user.mobile = phoneData.nationalNumber;           // Local format: "9876543210"
+      user.internationalPhone = phoneData.e164Format;   // E.164: "+919876543210"
+      user.countryCode = phoneData.dialingCode;         // "+91"
+    }
+
+    if (country) {
+      user.country = country;
+    }
+
+    if (username) {
+      user.username = username.toLowerCase();
+    }
+
+    if (gender) {
+      user.gender = gender;
+    }
+
+    if (occupation) {
+      user.occupation = occupation;
+    }
+
+    if (currency) {
+      user.currencySymbol = currency;
+    }
+
+    if (setupComplete !== undefined) {
+      user.setupComplete = setupComplete;
+    }
 
     await user.save();
 
@@ -408,13 +410,16 @@ router.put('/update-profile', async (req, res) => {
         firebaseUid: user.firebaseUid,
         email: user.email,
         displayName: user.displayName,
+        username: user.username,
         photoURL: user.photoURL,
         mobile: user.mobile,
-        dob: user.dob,
+        country: user.country,
+        countryCode: user.countryCode,
+        internationalPhone: user.internationalPhone,
         gender: user.gender,
         occupation: user.occupation,
+        currencySymbol: user.currencySymbol,
         setupComplete: user.setupComplete,
-        balance: user.balance,
         createdAt: user.createdAt
       }
     });

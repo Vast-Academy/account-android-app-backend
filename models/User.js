@@ -24,18 +24,6 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  country: {
-    type: String,
-    default: null
-  },
-  countryCode: {
-    type: String,
-    default: null
-  },
-  internationalPhone: {
-    type: String,
-    default: null
-  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
@@ -64,49 +52,7 @@ const userSchema = new mongoose.Schema({
   lastLogin: {
     type: Date,
     default: Date.now
-  },
-  // Chat Feature Fields
-  username: {
-    type: String,
-    lowercase: true,
-    sparse: true
-  },
-  searchableTerms: {
-    type: [String],
-    default: []
-  },
-  fcmToken: {
-    type: String,
-    default: null
-  },
-  isOnline: {
-    type: Boolean,
-    default: false
-  },
-  lastOnline: {
-    type: Date,
-    default: Date.now
-  },
-  privacy: {
-    phoneNumberVisible: {
-      type: Boolean,
-      default: true
-    },
-    lastSeenVisible: {
-      type: Boolean,
-      default: true
-    },
-    profilePhotoVisible: {
-      type: Boolean,
-      default: true
-    }
   }
 });
-
-// Create indexes for chat search and batch operations
-userSchema.index({ username: 1 });
-userSchema.index({ searchableTerms: 1 });
-userSchema.index({ mobile: 1 }); // Fixed: Use 'mobile' field for phone number lookups
-userSchema.index({ internationalPhone: 1 }); // Add index for international phone format
 
 module.exports = mongoose.model('User', userSchema);
