@@ -35,17 +35,6 @@ const generateUsernameSuggestions = async (baseUsername) => {
   return suggestions;
 };
 
-
-// Normalize phone for lookup (digits only, last 10)
-const normalizePhoneForLookup = (value) => {
-  if (!value) return '';
-  const digits = String(value).replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.length > 10) return digits.slice(-10);
-  if (digits.length < 8) return '';
-  return digits;
-};
-
 // 1. Google Sign-In - Create or Login User
 router.post('/google-signin', async (req, res) => {
   try {
@@ -346,53 +335,7 @@ router.get('/user', verifyToken, async (req, res) => {
   }
 });
 
-// 6. Lookup Users By Phones
-router.post('/users-by-phones', verifyToken, async (req, res) => {
-  try {
-    const { phones } = req.body;
-
-    if (!Array.isArray(phones)) {
-      return res.status(400).json({
-        success: false,
-        message: 'phones array is required'
-      });
-    }
-
-    const normalized = Array.from(new Set(
-      phones.map(normalizePhoneForLookup).filter(Boolean)
-    ));
-
-    if (normalized.length === 0) {
-      return res.status(200).json({ success: true, users: [] });
-    }
-
-    const users = await User.find({ mobile: { $in: normalized } })
-      .select('displayName mobile photoURL firebaseUid')
-      .lean();
-
-    const sanitized = users.map(user => ({
-      id: user._id,
-      firebaseUid: user.firebaseUid,
-      displayName: user.displayName,
-      photoURL: user.photoURL || null,
-      mobile: normalizePhoneForLookup(user.mobile) || user.mobile,
-    }));
-
-    return res.status(200).json({
-      success: true,
-      users: sanitized
-    });
-  } catch (error) {
-    console.error('Users By Phones Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to fetch users',
-      error: error.message
-    });
-  }
-});
-
-// 7. Logout
+// 6. Logout
 router.post('/logout', verifyToken, async (req, res) => {
   try {
     return res.status(200).json({
@@ -409,7 +352,7 @@ router.post('/logout', verifyToken, async (req, res) => {
   }
 });
 
-// 8. Update Profile
+// 7. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
     const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete } = req.body;
