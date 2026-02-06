@@ -373,7 +373,13 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
       return res.status(200).json({ success: true, users: [] });
     }
 
-    const users = await User.find({ mobile: { $in: normalized } })
+    // Search for both normalized (10 digits) and original formats (with country code)
+    const searchPhones = new Set([
+      ...normalized,  // 10-digit format: "9876543210"
+      ...phones       // Original format: "+919876543210"
+    ]);
+
+    const users = await User.find({ mobile: { $in: Array.from(searchPhones) } })
       .select('displayName mobile photoURL firebaseUid')
       .lean();
 
