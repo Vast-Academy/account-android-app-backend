@@ -419,7 +419,23 @@ router.post('/logout', verifyToken, async (req, res) => {
 // 8. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete, country, username, currency } = req.body;
+    const {
+      firebaseUid,
+      displayName,
+      mobile,
+      dob,
+      gender,
+      occupation,
+      setupComplete,
+      country,
+      username,
+      currency,
+      fcmToken,
+      bio,
+      isOnline,
+      lastOnline,
+      privacy
+    } = req.body;
 
     // Validation
     if (!firebaseUid || !displayName) {
@@ -466,7 +482,7 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
-    // Update fields
+    // Update existing fields
     user.displayName = displayName.trim();
     if (mobile) user.mobile = mobile;
     if (dob) user.dob = new Date(dob);
@@ -476,6 +492,20 @@ router.put('/update-profile', async (req, res) => {
     if (username) user.username = username.toLowerCase();
     if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
+
+    // Update chat-related fields
+    if (fcmToken) user.fcmToken = fcmToken;
+    if (bio) user.bio = bio;
+    if (isOnline !== undefined) user.isOnline = isOnline;
+    if (lastOnline) user.lastOnline = lastOnline;
+    if (privacy) user.privacy = { ...user.privacy, ...privacy };
+
+    // Auto-generate searchableTerms from displayName, username, and mobile
+    user.searchableTerms = [
+      user.displayName.toLowerCase(),
+      user.username ? user.username.toLowerCase() : '',
+      user.mobile ? normalizePhoneForLookup(user.mobile) : ''
+    ].filter(Boolean);
 
     await user.save();
 
@@ -495,6 +525,11 @@ router.put('/update-profile', async (req, res) => {
         country: user.country,
         username: user.username,
         currencySymbol: user.currencySymbol,
+        fcmToken: user.fcmToken,
+        bio: user.bio,
+        isOnline: user.isOnline,
+        lastOnline: user.lastOnline,
+        privacy: user.privacy,
         setupComplete: user.setupComplete,
         balance: user.balance,
         createdAt: user.createdAt
