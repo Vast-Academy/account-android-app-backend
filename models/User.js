@@ -41,6 +41,17 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  country: {
+    type: String,
+    default: null
+  },
+  username: {
+    type: String,
+    unique: true,
+    sparse: true,
+    default: null,
+    lowercase: true
+  },
   googleDriveConnected: {
     type: Boolean,
     default: false

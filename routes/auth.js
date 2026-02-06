@@ -93,7 +93,11 @@ router.post('/google-signin', async (req, res) => {
         displayName: user.displayName,
         photoURL: user.photoURL,
         username: user.username,
+        mobile: user.mobile,
+        country: user.country,
+        currencySymbol: user.currencySymbol,
         balance: user.balance,
+        setupComplete: user.setupComplete,
         createdAt: user.createdAt
       }
     });
@@ -329,6 +333,9 @@ router.get('/user', verifyToken, async (req, res) => {
         email: user.email,
         displayName: user.displayName,
         photoURL: user.photoURL,
+        mobile: user.mobile,
+        country: user.country,
+        currencySymbol: user.currencySymbol,
         balance: user.balance,
         setupComplete: user.setupComplete,
         googleDriveConnected: user.googleDriveConnected,
@@ -412,7 +419,7 @@ router.post('/logout', verifyToken, async (req, res) => {
 // 8. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
-    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete } = req.body;
+    const { firebaseUid, displayName, mobile, dob, gender, occupation, setupComplete, country, username, currency } = req.body;
 
     // Validation
     if (!firebaseUid || !displayName) {
@@ -430,12 +437,24 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
-    // Validate mobile number if provided
-    if (mobile && !/^\d{10}$/.test(mobile)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Mobile number must be 10 digits'
-      });
+    // Validate username if provided
+    if (username) {
+      if (!validateUsername(username)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
+        });
+      }
+
+      // Check if username is already taken (and different from current user's username)
+      const user = await User.findOne({ firebaseUid });
+      const existingUser = await User.findOne({ username: username.toLowerCase() });
+      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Username already taken'
+        });
+      }
     }
 
     // Find user
@@ -453,6 +472,9 @@ router.put('/update-profile', async (req, res) => {
     if (dob) user.dob = new Date(dob);
     if (gender) user.gender = gender;
     if (occupation) user.occupation = occupation;
+    if (country) user.country = country;
+    if (username) user.username = username.toLowerCase();
+    if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
 
     await user.save();
@@ -470,6 +492,9 @@ router.put('/update-profile', async (req, res) => {
         dob: user.dob,
         gender: user.gender,
         occupation: user.occupation,
+        country: user.country,
+        username: user.username,
+        currencySymbol: user.currencySymbol,
         setupComplete: user.setupComplete,
         balance: user.balance,
         createdAt: user.createdAt
