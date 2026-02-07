@@ -18,6 +18,7 @@ connectDB();
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/users', require('./routes/users'));
+app.use('/api/ledger', require('./routes/ledger'));
 
 // Health Check
 app.get('/', (req, res) => {
