@@ -47,9 +47,6 @@ const userSchema = new mongoose.Schema({
   },
   username: {
     type: String,
-    unique: true,
-    sparse: true,
-    default: null,
     lowercase: true
   },
   fcmToken: {
@@ -101,5 +98,11 @@ const userSchema = new mongoose.Schema({
     default: Date.now
   }
 });
+
+// Enforce uniqueness only when username is a real string (not null/empty)
+userSchema.index(
+  { username: 1 },
+  { unique: true, partialFilterExpression: { username: { $type: 'string', $ne: '' } } }
+);
 
 module.exports = mongoose.model('User', userSchema);
