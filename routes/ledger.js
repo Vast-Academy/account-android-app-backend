@@ -18,6 +18,8 @@ const normalizeAmount = (value) => {
   return Math.abs(parsed);
 };
 
+const isMongoObjectId = value => /^[a-f\\d]{24}$/i.test(String(value || ''));
+
 // POST /api/ledger/sync
 router.post('/sync', verifyToken, async (req, res) => {
   try {
@@ -61,7 +63,11 @@ router.post('/sync', verifyToken, async (req, res) => {
       });
     }
 
-    const receiver = await User.findOne({ firebaseUid: String(peerUserId) }).lean();
+    const receiverLookup = [{ firebaseUid: String(peerUserId) }];
+    if (isMongoObjectId(peerUserId)) {
+      receiverLookup.push({ _id: String(peerUserId) });
+    }
+    const receiver = await User.findOne({ $or: receiverLookup }).lean();
     if (!receiver) {
       return res.status(404).json({
         success: false,
@@ -99,9 +105,20 @@ router.post('/sync', verifyToken, async (req, res) => {
       contactRecordId: String(contactRecordId || ''),
     };
 
+    const senderTitle = String(sender?.displayName || 'Contact');
+    const amountLabel = 'Rs ' + Number(amountValue).toLocaleString('en-IN');
+    const noteText = String(note || '').trim();
+    const bodyText = noteText
+      ? `${senderTitle} recorded ${amountLabel} (${entryTypeValue}) - ${noteText}`
+      : `${senderTitle} recorded ${amountLabel} (${entryTypeValue})`;
+
     await admin.messaging().send({
       token: receiver.fcmToken,
       data: eventData,
+      notification: {
+        title: senderTitle,
+        body: bodyText,
+      },
       android: {
         priority: 'high',
       },
