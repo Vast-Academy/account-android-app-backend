@@ -24,6 +24,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  mobileNormalized: {
+    type: String,
+    default: null,
+    index: true
+  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
@@ -38,6 +43,14 @@ const userSchema = new mongoose.Schema({
     default: null
   },
   setupComplete: {
+    type: Boolean,
+    default: false
+  },
+  profileSchemaVersion: {
+    type: Number,
+    default: 1
+  },
+  needsProfileRefresh: {
     type: Boolean,
     default: false
   },

@@ -46,6 +46,33 @@ const normalizePhoneForLookup = (value) => {
   return digits;
 };
 
+const PROFILE_SCHEMA_VERSION = 2;
+
+const buildSearchableTerms = user => {
+  return [
+    String(user?.displayName || '').toLowerCase(),
+    String(user?.username || '').toLowerCase(),
+    normalizePhoneForLookup(user?.mobile),
+  ].filter(Boolean);
+};
+
+const buildPhoneCandidates = (rawPhone, normalizedPhone) => {
+  const normalized = String(normalizedPhone || '');
+  const raw = String(rawPhone || '').trim();
+  if (!normalized) {
+    return raw ? [raw] : [];
+  }
+  return Array.from(
+    new Set([
+      normalized,
+      `+${normalized}`,
+      `+91${normalized}`,
+      `91${normalized}`,
+      raw,
+    ].filter(Boolean)),
+  );
+};
+
 // 1. Google Sign-In - Create or Login User
 router.post('/google-signin', async (req, res) => {
   try {
@@ -74,18 +101,29 @@ router.post('/google-signin', async (req, res) => {
         photoURL: picture || null,
         balance: 0,
         setupComplete: false,
+        profileSchemaVersion: PROFILE_SCHEMA_VERSION,
+        needsProfileRefresh: true,
         googleDriveConnected: true
       });
       await user.save();
     } else {
       // Update last login
       user.lastLogin = Date.now();
+      const normalizedMobile = normalizePhoneForLookup(user.mobile);
+      user.mobileNormalized = normalizedMobile || null;
+      user.searchableTerms = buildSearchableTerms(user);
+      const isLegacyProfile = Number(user.profileSchemaVersion || 0) < PROFILE_SCHEMA_VERSION;
+      if (isLegacyProfile || !normalizedMobile) {
+        user.needsProfileRefresh = true;
+      }
       await user.save();
     }
 
     return res.status(200).json({
       success: true,
       setupComplete: user.setupComplete,
+      profileSchemaVersion: Number(user.profileSchemaVersion || 1),
+      needsProfileRefresh: Boolean(user.needsProfileRefresh),
       user: {
         id: user._id,
         firebaseUid: user.firebaseUid,
@@ -98,6 +136,8 @@ router.post('/google-signin', async (req, res) => {
         currencySymbol: user.currencySymbol,
         balance: user.balance,
         setupComplete: user.setupComplete,
+        profileSchemaVersion: Number(user.profileSchemaVersion || 1),
+        needsProfileRefresh: Boolean(user.needsProfileRefresh),
         createdAt: user.createdAt
       }
     });
@@ -159,6 +199,56 @@ router.post('/check-username', async (req, res) => {
       success: false,
       message: 'Failed to check username',
       error: error.message
+    });
+  }
+});
+
+// 2.5 Check phone availability
+router.post('/check-phone', verifyToken, async (req, res) => {
+  try {
+    const { phone, firebaseUid } = req.body || {};
+    const normalizedPhone = normalizePhoneForLookup(phone);
+
+    if (!normalizedPhone) {
+      return res.status(200).json({
+        success: true,
+        available: false,
+        message: 'Invalid phone number',
+      });
+    }
+
+    const requesterUid = firebaseUid || req.user?.uid || null;
+    let excludeUserId = null;
+    if (requesterUid) {
+      const requester = await User.findOne({ firebaseUid: String(requesterUid) }).select('_id').lean();
+      excludeUserId = requester?._id || null;
+    }
+
+    const phoneCandidates = buildPhoneCandidates(phone, normalizedPhone);
+    const query = {
+      $or: [
+        { mobileNormalized: normalizedPhone },
+        { mobile: { $in: phoneCandidates } },
+        { mobile: { $regex: `${normalizedPhone}$` } },
+      ],
+    };
+    if (excludeUserId) {
+      query._id = { $ne: excludeUserId };
+    }
+
+    const existing = await User.findOne(query).select('_id').lean();
+
+    return res.status(200).json({
+      success: true,
+      available: !existing,
+      message: existing ? 'Phone number already registered' : 'Phone number available',
+    });
+  } catch (error) {
+    console.error('Check Phone Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check phone number',
+      error: error.message,
     });
   }
 });
@@ -298,6 +388,8 @@ router.post('/login', async (req, res) => {
         displayName: user.displayName,
         photoURL: user.photoURL,
         balance: user.balance,
+        profileSchemaVersion: Number(user.profileSchemaVersion || 1),
+        needsProfileRefresh: Boolean(user.needsProfileRefresh),
         createdAt: user.createdAt
       }
     });
@@ -346,6 +438,8 @@ router.get('/user', verifyToken, async (req, res) => {
         currencySymbol: user.currencySymbol,
         balance: user.balance,
         setupComplete: user.setupComplete,
+        profileSchemaVersion: Number(user.profileSchemaVersion || 1),
+        needsProfileRefresh: Boolean(user.needsProfileRefresh),
         googleDriveConnected: user.googleDriveConnected,
         createdAt: user.createdAt
       }
@@ -387,8 +481,13 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
       ...phones       // Original format: "+919876543210"
     ]);
 
-    const users = await User.find({ mobile: { $in: Array.from(searchPhones) } })
-      .select('displayName mobile photoURL firebaseUid')
+    const users = await User.find({
+      $or: [
+        { mobile: { $in: Array.from(searchPhones) } },
+        { mobileNormalized: { $in: normalized } },
+      ],
+    })
+      .select('displayName mobile mobileNormalized photoURL firebaseUid')
       .lean();
 
     const sanitized = users.map(user => ({
@@ -396,7 +495,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
       firebaseUid: user.firebaseUid,
       displayName: user.displayName,
       photoURL: user.photoURL || null,
-      mobile: normalizePhoneForLookup(user.mobile) || user.mobile,
+      mobile: normalizePhoneForLookup(user.mobileNormalized || user.mobile) || user.mobile,
     }));
 
     return res.status(200).json({
@@ -496,6 +595,36 @@ router.put('/update-profile', async (req, res) => {
       });
     }
 
+    const normalizedIncomingMobile = normalizePhoneForLookup(mobile);
+    if (mobile && !normalizedIncomingMobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please enter a valid phone number',
+      });
+    }
+
+    if (mobile && normalizedIncomingMobile) {
+      const phoneCandidates = buildPhoneCandidates(mobile, normalizedIncomingMobile);
+      const duplicateUser = await User.findOne({
+        _id: { $ne: user._id },
+        $or: [
+          { mobileNormalized: normalizedIncomingMobile },
+          { mobile: { $in: phoneCandidates } },
+          { mobile: { $regex: `${normalizedIncomingMobile}$` } },
+        ],
+      })
+        .select('_id')
+        .lean();
+
+      if (duplicateUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'Phone number already registered',
+          code: 'PHONE_TAKEN',
+        });
+      }
+    }
+
     // Update existing fields
     user.displayName = displayName.trim();
     if (mobile) user.mobile = mobile;
@@ -514,12 +643,12 @@ router.put('/update-profile', async (req, res) => {
     if (lastOnline) user.lastOnline = lastOnline;
     if (privacy) user.privacy = { ...user.privacy, ...privacy };
 
-    // Auto-generate searchableTerms from displayName, username, and mobile
-    user.searchableTerms = [
-      user.displayName.toLowerCase(),
-      user.username ? user.username.toLowerCase() : '',
-      user.mobile ? normalizePhoneForLookup(user.mobile) : ''
-    ].filter(Boolean);
+    // Refresh normalized profile/search fields used by chat/contacts discovery.
+    const normalizedMobile = normalizePhoneForLookup(user.mobile);
+    user.mobileNormalized = normalizedMobile || null;
+    user.searchableTerms = buildSearchableTerms(user);
+    user.profileSchemaVersion = PROFILE_SCHEMA_VERSION;
+    user.needsProfileRefresh = !normalizedMobile;
 
     await user.save();
 
@@ -545,6 +674,8 @@ router.put('/update-profile', async (req, res) => {
         lastOnline: user.lastOnline,
         privacy: user.privacy,
         setupComplete: user.setupComplete,
+        profileSchemaVersion: Number(user.profileSchemaVersion || 1),
+        needsProfileRefresh: Boolean(user.needsProfileRefresh),
         balance: user.balance,
         createdAt: user.createdAt
       }
