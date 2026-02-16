@@ -5,8 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js",
-    "migrate:profile-v2": "node scripts/migrateProfileSchemaV2.js"
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
