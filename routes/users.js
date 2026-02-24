@@ -51,14 +51,23 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
       }
     }
 
+    // If username is empty, keep the existing username (don't overwrite)
+    let finalUsername = username?.toLowerCase();
+    if (!finalUsername || finalUsername.trim() === '') {
+      const existingUser = await User.findOne({ firebaseUid });
+      if (existingUser && existingUser.username) {
+        finalUsername = existingUser.username;  // ← Keep existing
+      }
+    }
+
     // Generate searchable terms if not provided
-    const finalSearchableTerms = searchableTerms || generateSearchTerms({ username, displayName, mobile });
+    const finalSearchableTerms = searchableTerms || generateSearchTerms({ username: finalUsername, displayName, mobile });
 
     // Update or create user
     const user = await User.findOneAndUpdate(
       { firebaseUid },
       {
-        username: username?.toLowerCase(),
+        username: finalUsername,
         displayName,
         mobile,
         email,
