@@ -3,6 +3,102 @@ const router = express.Router();
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/authMiddleware');
 
+// Helper: Generate searchable terms from user data
+const generateSearchTerms = (userData) => {
+  const terms = [];
+
+  // Username
+  if (userData.username) {
+    terms.push(userData.username.toLowerCase());
+  }
+
+  // Display name words
+  if (userData.displayName) {
+    const words = userData.displayName.toLowerCase().split(' ');
+    terms.push(...words);
+  }
+
+  // Phone number
+  if (userData.mobile) {
+    terms.push(userData.mobile);
+  }
+
+  return [...new Set(terms)]; // Remove duplicates
+};
+
+// POST /api/users/sync-profile
+router.post('/sync-profile', verifyToken, async (req, res) => {
+  try {
+    const firebaseUid = req.user.uid;
+    const { username, displayName, mobile, email, photoURL, fcmToken, searchableTerms, privacy } = req.body;
+
+    // Validate username format if provided
+    if (username && !/^[a-zA-Z0-9._-]+$/.test(username)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
+      });
+    }
+
+    // Check if username is already taken (if different from current)
+    if (username) {
+      const existingUser = await User.findOne({ username: username.toLowerCase() });
+      if (existingUser && existingUser.firebaseUid !== firebaseUid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Username already taken'
+        });
+      }
+    }
+
+    // Generate searchable terms if not provided
+    const finalSearchableTerms = searchableTerms || generateSearchTerms({ username, displayName, mobile });
+
+    // Update or create user
+    const user = await User.findOneAndUpdate(
+      { firebaseUid },
+      {
+        username: username?.toLowerCase(),
+        displayName,
+        mobile,
+        email,
+        photoURL,
+        fcmToken,
+        searchableTerms: finalSearchableTerms,
+        privacy: privacy || {
+          phoneNumberVisible: true,
+          lastSeenVisible: true,
+          profilePhotoVisible: true
+        },
+        lastOnline: new Date()
+      },
+      { new: true, upsert: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile synced successfully',
+      user: {
+        id: user._id,
+        firebaseUid: user.firebaseUid,
+        username: user.username,
+        displayName: user.displayName,
+        mobile: user.mobile,
+        email: user.email,
+        photoURL: user.photoURL,
+        fcmToken: user.fcmToken
+      }
+    });
+  } catch (error) {
+    console.error('❌ Sync Profile Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to sync profile',
+      error: error.message
+    });
+  }
+});
+
 // POST /api/users/search
 router.post('/search', verifyToken, async (req, res) => {
   try {

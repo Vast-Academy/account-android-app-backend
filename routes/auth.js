@@ -46,6 +46,28 @@ const normalizePhoneForLookup = (value) => {
   return digits;
 };
 
+const isPhoneTaken = async (normalizedPhone, excludeUserId = null) => {
+  if (!normalizedPhone) {
+    return false;
+  }
+
+  const query = {
+    $or: [
+      { searchableTerms: normalizedPhone },
+      { mobile: { $regex: `${normalizedPhone}$` } },
+    ],
+  };
+
+  if (excludeUserId) {
+    query._id = { $ne: excludeUserId };
+  }
+
+  const candidates = await User.find(query).select('mobile').lean();
+  return candidates.some(candidate => {
+    return normalizePhoneForLookup(candidate.mobile) === normalizedPhone;
+  });
+};
+
 // 1. Google Sign-In - Create or Login User
 router.post('/google-signin', async (req, res) => {
   try {
@@ -430,7 +452,51 @@ router.post('/logout', verifyToken, async (req, res) => {
   }
 });
 
-// 8. Update Profile
+// 8. Check Phone Availability
+router.post('/check-phone', verifyToken, async (req, res) => {
+  try {
+    const { mobile } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required'
+      });
+    }
+
+    const currentUser = await User.findOne({ firebaseUid: req.user.uid });
+    if (!currentUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const normalizedPhone = normalizePhoneForLookup(mobile);
+    if (!normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid phone number'
+      });
+    }
+
+    const taken = await isPhoneTaken(normalizedPhone, currentUser._id);
+
+    return res.status(200).json({
+      success: true,
+      available: !taken
+    });
+  } catch (error) {
+    console.error('Check Phone Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to check phone number',
+      error: error.message
+    });
+  }
+});
+
+// 9. Update Profile
 router.put('/update-profile', async (req, res) => {
   try {
     const {
@@ -494,6 +560,19 @@ router.put('/update-profile', async (req, res) => {
         success: false,
         message: 'User not found'
       });
+    }
+
+    if (mobile) {
+      const normalizedPhone = normalizePhoneForLookup(mobile);
+      if (normalizedPhone) {
+        const taken = await isPhoneTaken(normalizedPhone, user._id);
+        if (taken) {
+          return res.status(409).json({
+            success: false,
+            message: 'Phone number already taken'
+          });
+        }
+      }
     }
 
     // Update existing fields
