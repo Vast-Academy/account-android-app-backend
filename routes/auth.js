@@ -415,6 +415,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
 
     const sanitized = users.map(user => ({
       id: user._id,
+      userId: user.firebaseUid || user._id.toString(),  // ← ADD THIS: Fallback to MongoDB ID
       firebaseUid: user.firebaseUid,
       displayName: user.displayName,
       photoURL: user.photoURL || null,

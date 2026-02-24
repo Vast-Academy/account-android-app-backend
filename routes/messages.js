@@ -31,9 +31,19 @@ router.post('/send', verifyToken, async (req, res) => {
     // First try: lookup by firebaseUid
     let receiver = await User.findOne({ firebaseUid: receiverId });
 
-    // Second try: if not found, lookup by phone number (fallback)
+    // Second try: if not found, lookup by MongoDB _id (fallback)
     if (!receiver && receiverId) {
-      console.log('🔍 [SEND] FirebaseUid lookup failed, trying phone lookup:', receiverId);
+      console.log('🔍 [SEND] FirebaseUid lookup failed, trying MongoDB ID lookup:', receiverId);
+      try {
+        receiver = await User.findOne({ _id: receiverId });
+      } catch (e) {
+        console.log('🔍 [SEND] MongoDB ID lookup also failed');
+      }
+    }
+
+    // Third try: if still not found, lookup by phone number (final fallback)
+    if (!receiver && receiverId) {
+      console.log('🔍 [SEND] ID lookup failed, trying phone lookup:', receiverId);
       receiver = await User.findOne({
         mobile: { $regex: `${receiverId.replace(/\D/g, '')}$` }
       });
