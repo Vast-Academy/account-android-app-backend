@@ -410,7 +410,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
     ]);
 
     const users = await User.find({ mobile: { $in: Array.from(searchPhones) } })
-      .select('displayName mobile photoURL firebaseUid')
+      .select('displayName mobile photoURL firebaseUid username')
       .lean();
 
     const sanitized = users.map(user => ({
