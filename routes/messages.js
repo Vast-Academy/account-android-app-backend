@@ -27,7 +27,17 @@ router.post('/send', verifyToken, async (req, res) => {
 
     // Get receiver's FCM token
     console.log('🔍 [SEND] Looking up receiver:', receiverId);
-    const receiver = await User.findOne({ firebaseUid: receiverId });
+
+    // First try: lookup by firebaseUid
+    let receiver = await User.findOne({ firebaseUid: receiverId });
+
+    // Second try: if not found, lookup by phone number (fallback)
+    if (!receiver && receiverId) {
+      console.log('🔍 [SEND] FirebaseUid lookup failed, trying phone lookup:', receiverId);
+      receiver = await User.findOne({
+        mobile: { $regex: `${receiverId.replace(/\D/g, '')}$` }
+      });
+    }
 
     if (!receiver) {
       console.error('❌ [SEND] Receiver not found:', receiverId);
