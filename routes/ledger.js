@@ -63,12 +63,27 @@ router.post('/sync', verifyToken, async (req, res) => {
       });
     }
 
-    const receiverLookup = [{ firebaseUid: String(peerUserId) }];
-    if (isMongoObjectId(peerUserId)) {
-      receiverLookup.push({ _id: String(peerUserId) });
-    }
-    const receiver = await User.findOne({ $or: receiverLookup }).lean();
+    // Step 1: Try username lookup first (new approach)
+    let receiver = await User.findOne({ username: peerUserId.toLowerCase() }).lean();
+
+    // Step 2: Fallback to firebaseUid (for legacy queued events)
     if (!receiver) {
+      console.log('🔍 [LEDGER] Username lookup failed, trying firebaseUid:', peerUserId);
+      receiver = await User.findOne({ firebaseUid: String(peerUserId) }).lean();
+    }
+
+    // Step 3: Fallback to MongoDB _id (if valid ObjectID)
+    if (!receiver && isMongoObjectId(peerUserId)) {
+      console.log('🔍 [LEDGER] FirebaseUid lookup failed, trying MongoDB ID:', peerUserId);
+      try {
+        receiver = await User.findOne({ _id: String(peerUserId) }).lean();
+      } catch (e) {
+        console.log('🔍 [LEDGER] MongoDB ID lookup also failed');
+      }
+    }
+
+    if (!receiver) {
+      console.error('❌ [LEDGER] Receiver not found:', peerUserId);
       return res.status(404).json({
         success: false,
         message: 'Receiver not found',
