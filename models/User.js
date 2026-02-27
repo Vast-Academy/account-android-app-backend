@@ -57,6 +57,31 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  fcmTokenUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  fcmTokenStatus: {
+    type: String,
+    enum: ['unknown', 'ok', 'error'],
+    default: 'unknown'
+  },
+  fcmTokenLastError: {
+    type: String,
+    default: null
+  },
+  fcmTokenPlatform: {
+    type: String,
+    default: null
+  },
+  fcmTokenDeviceId: {
+    type: String,
+    default: null
+  },
+  fcmTokenAppVersion: {
+    type: String,
+    default: null
+  },
   searchableTerms: {
     type: [String],
     default: [],

@@ -192,11 +192,19 @@ router.post('/search', verifyToken, async (req, res) => {
 
 router.post('/update-fcm-token', verifyToken, async (req, res) => {
   try {
-    const { fcmToken } = req.body || {};
+    const {
+      fcmToken,
+      platform,
+      appVersion,
+      deviceId,
+      reason,
+      errorCode,
+      errorMessage,
+    } = req.body || {};
     const userId = req.user?.uid;
 
-    if (!userId || !fcmToken) {
-      return res.status(400).json({ success: false, message: 'userId (from token) and fcmToken are required' });
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId (from token) is required' });
     }
 
     const user = await User.findOne({ firebaseUid: userId });
@@ -204,12 +212,68 @@ router.post('/update-fcm-token', verifyToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    user.fcmToken = fcmToken;
+    const nextToken = String(fcmToken || '').trim();
+    if (!nextToken) {
+      user.fcmTokenStatus = 'error';
+      user.fcmTokenLastError = String(
+        errorMessage || errorCode || reason || 'token_missing',
+      ).slice(0, 300);
+      user.lastOnline = new Date();
+      await user.save();
+
+      return res.status(400).json({
+        success: false,
+        message: 'fcmToken is required',
+      });
+    }
+
+    user.fcmToken = nextToken;
+    user.fcmTokenUpdatedAt = new Date();
+    user.fcmTokenStatus = 'ok';
+    user.fcmTokenLastError = null;
+    if (platform) user.fcmTokenPlatform = String(platform).slice(0, 30);
+    if (deviceId) user.fcmTokenDeviceId = String(deviceId).slice(0, 120);
+    if (appVersion) user.fcmTokenAppVersion = String(appVersion).slice(0, 40);
     user.lastOnline = new Date();
     user.isOnline = true;
     await user.save();
 
-    return res.status(200).json({ success: true, message: 'FCM token updated successfully' });
+    return res.status(200).json({
+      success: true,
+      message: 'FCM token updated successfully',
+      tokenUpdatedAt: user.fcmTokenUpdatedAt,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/token-health', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user?.uid;
+    const user = await User.findOne({ firebaseUid: userId }).select(
+      'fcmToken fcmTokenUpdatedAt fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenAppVersion',
+    );
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const token = String(user.fcmToken || '');
+    const tokenSuffix = token ? token.slice(-8) : '';
+
+    return res.status(200).json({
+      success: true,
+      health: {
+        hasToken: !!token,
+        tokenSuffix,
+        updatedAt: user.fcmTokenUpdatedAt || null,
+        status: user.fcmTokenStatus || 'unknown',
+        lastError: user.fcmTokenLastError || null,
+        platform: user.fcmTokenPlatform || null,
+        appVersion: user.fcmTokenAppVersion || null,
+      },
+    });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
