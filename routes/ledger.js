@@ -91,7 +91,7 @@ router.post('/sync', verifyToken, async (req, res) => {
     }
 
     const sender = await User.findOne({ firebaseUid: String(sourceUserId) })
-      .select('displayName')
+      .select('displayName username mobile mobileNormalized')
       .lean();
 
     if (!receiver.fcmToken) {
@@ -102,12 +102,18 @@ router.post('/sync', verifyToken, async (req, res) => {
       });
     }
 
+    const senderTitle = String(sender?.displayName || sender?.username || 'Contact');
+    const sourceUserPhone = String(
+      sender?.mobileNormalized || sender?.mobile || ''
+    ).trim();
+
     const eventData = {
       type: 'ledger_event',
       op: String(opValue),
       originTxnId: String(originTxnId),
       sourceUserId: String(sourceUserId),
-      sourceUserName: String(sender?.displayName || 'Contact'),
+      sourceUserName: senderTitle,
+      sourceUserPhone,
       peerUserId: String(peerUserId),
       entryType: String(entryTypeValue),
       amount: String(amountValue),
@@ -120,7 +126,6 @@ router.post('/sync', verifyToken, async (req, res) => {
       contactRecordId: String(contactRecordId || ''),
     };
 
-    const senderTitle = String(sender?.displayName || 'Contact');
     const amountLabel = 'Rs ' + Number(amountValue).toLocaleString('en-IN');
     const noteText = String(note || '').trim();
     const bodyText = noteText
