@@ -24,6 +24,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  mobileNormalized: {
+    type: String,
+    default: null
+  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
@@ -103,6 +107,12 @@ const userSchema = new mongoose.Schema({
 userSchema.index(
   { username: 1 },
   { unique: true, partialFilterExpression: { username: { $type: 'string', $ne: '' } } }
+);
+
+// Enforce uniqueness for active normalized phone values.
+userSchema.index(
+  { mobileNormalized: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { mobileNormalized: { $type: 'string', $ne: '' } } }
 );
 
 module.exports = mongoose.model('User', userSchema);

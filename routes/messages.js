@@ -117,4 +117,46 @@ router.post('/send', verifyToken, async (req, res) => {
   }
 });
 
+// POST /api/messages/delivery-receipt
+// Client calls this to acknowledge delivered/read states.
+router.post('/delivery-receipt', verifyToken, async (req, res) => {
+  try {
+    const { messageId, status } = req.body || {};
+
+    if (!messageId || !status) {
+      return res.status(400).json({
+        success: false,
+        message: 'messageId and status are required',
+      });
+    }
+
+    const validStatuses = ['pending', 'sent', 'delivered', 'read', 'failed'];
+    if (!validStatuses.includes(String(status))) {
+      return res.status(400).json({
+        success: false,
+        message: `Status must be one of: ${validStatuses.join(', ')}`,
+      });
+    }
+
+    // Current backend keeps message state on client side; this endpoint is
+    // intentionally lightweight for compatibility and analytics/logging.
+    console.log('📦 [RECEIPT] Delivery receipt', {
+      messageId: String(messageId),
+      status: String(status),
+      by: req.user?.uid || 'unknown',
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Delivery receipt recorded',
+    });
+  } catch (error) {
+    console.error('❌ [RECEIPT] Delivery receipt error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;

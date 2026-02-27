@@ -2,42 +2,14 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
+const PhoneLink = require('../models/PhoneLink');
+const PhoneClaim = require('../models/PhoneClaim');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
 
-// Helper function to validate username
-const validateUsername = (username) => {
-  const regex = /^[a-zA-Z0-9._-]+$/;
-  return regex.test(username);
-};
+const validateUsername = username => /^[a-zA-Z0-9._-]+$/.test(String(username || ''));
 
-// Helper function to generate username suggestions
-const generateUsernameSuggestions = async (baseUsername) => {
-  const suggestions = [];
-  const baseClean = baseUsername.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-  const variants = [
-    `${baseClean}_${Math.floor(Math.random() * 1000)}`,
-    `${baseClean}.official`,
-    `${baseClean}-${new Date().getFullYear()}`,
-    `${baseClean}_user`,
-    `${baseClean}.${Math.floor(Math.random() * 100)}`,
-  ];
-
-  for (const variant of variants) {
-    const exists = await User.findOne({ username: variant.toLowerCase() });
-    if (!exists) {
-      suggestions.push(variant);
-      if (suggestions.length >= 4) break;
-    }
-  }
-
-  return suggestions;
-};
-
-
-// Normalize phone for lookup (digits only, last 10)
-const normalizePhoneForLookup = (value) => {
+const normalizePhoneForLookup = value => {
   if (!value) return '';
   const digits = String(value).replace(/\D/g, '');
   if (!digits) return '';
@@ -46,61 +18,114 @@ const normalizePhoneForLookup = (value) => {
   return digits;
 };
 
-const isPhoneTaken = async (normalizedPhone, excludeUserId = null) => {
-  if (!normalizedPhone) {
-    return false;
-  }
-
-  const query = {
-    $or: [
-      { searchableTerms: normalizedPhone },
-      { mobile: { $regex: `${normalizedPhone}$` } },
-    ],
-  };
-
-  if (excludeUserId) {
-    query._id = { $ne: excludeUserId };
-  }
-
-  const candidates = await User.find(query).select('mobile').lean();
-  return candidates.some(candidate => {
-    return normalizePhoneForLookup(candidate.mobile) === normalizedPhone;
-  });
+const normalizeFullPhone = value => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return value?.startsWith('+') ? `+${digits}` : digits;
 };
 
-// 1. Google Sign-In - Create or Login User
+const generateSearchableTerms = user => {
+  const terms = [];
+  if (user?.displayName) {
+    terms.push(...String(user.displayName).toLowerCase().split(' ').filter(Boolean));
+  }
+  if (user?.username) {
+    terms.push(String(user.username).toLowerCase());
+  }
+  if (user?.mobileNormalized) {
+    terms.push(String(user.mobileNormalized));
+  }
+  if (user?.mobile) {
+    terms.push(String(user.mobile));
+  }
+  return [...new Set(terms.filter(Boolean))];
+};
+
+const syncPhoneLinks = async (userId, nextFullPhone, prevNormalized = '') => {
+  const nextNormalized = normalizePhoneForLookup(nextFullPhone);
+  const now = new Date();
+
+  if (prevNormalized && prevNormalized !== nextNormalized) {
+    await PhoneLink.updateMany(
+      { userId: String(userId), phoneNormalized: prevNormalized, isCurrent: true },
+      { $set: { isCurrent: false, validTo: now } },
+    );
+  }
+
+  if (!nextNormalized) {
+    return '';
+  }
+
+  await PhoneLink.updateMany(
+    { userId: String(userId), phoneNormalized: nextNormalized, isCurrent: true },
+    { $set: { fullPhone: normalizeFullPhone(nextFullPhone), validTo: null } },
+  );
+
+  const existing = await PhoneLink.findOne({
+    userId: String(userId),
+    phoneNormalized: nextNormalized,
+    isCurrent: true,
+  });
+
+  if (!existing) {
+    await PhoneLink.create({
+      userId: String(userId),
+      phoneNormalized: nextNormalized,
+      fullPhone: normalizeFullPhone(nextFullPhone),
+      isCurrent: true,
+      validFrom: now,
+      validTo: null,
+    });
+  }
+
+  return nextNormalized;
+};
+
+const isPhoneTaken = async (normalizedPhone, excludeFirebaseUid = '') => {
+  if (!normalizedPhone) return false;
+
+  const active = await PhoneLink.findOne({
+    phoneNormalized: normalizedPhone,
+    isCurrent: true,
+    ...(excludeFirebaseUid ? { userId: { $ne: String(excludeFirebaseUid) } } : {}),
+  }).lean();
+
+  if (active) {
+    return true;
+  }
+
+  const fallback = await User.findOne({
+    mobileNormalized: normalizedPhone,
+    ...(excludeFirebaseUid ? { firebaseUid: { $ne: String(excludeFirebaseUid) } } : {}),
+  }).lean();
+
+  return Boolean(fallback);
+};
+
 router.post('/google-signin', async (req, res) => {
   try {
     const { idToken } = req.body;
 
     if (!idToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'ID token is required'
-      });
+      return res.status(400).json({ success: false, message: 'ID token is required' });
     }
 
-    // Verify Firebase ID token
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const { uid, email, name, picture } = decodedToken;
 
-    // Check if user exists in MongoDB
     let user = await User.findOne({ firebaseUid: uid });
 
     if (!user) {
-      // Create new user (setup not complete)
       user = new User({
         firebaseUid: uid,
-        email: email,
+        email,
         displayName: name || email.split('@')[0],
         photoURL: picture || null,
-        balance: 0,
         setupComplete: false,
-        googleDriveConnected: true
+        googleDriveConnected: true,
       });
       await user.save();
     } else {
-      // Update last login
       user.lastLogin = Date.now();
       await user.save();
     }
@@ -108,401 +133,251 @@ router.post('/google-signin', async (req, res) => {
     return res.status(200).json({
       success: true,
       setupComplete: user.setupComplete,
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        username: user.username,
-        mobile: user.mobile,
-        country: user.country,
-        currencySymbol: user.currencySymbol,
-        balance: user.balance,
-        setupComplete: user.setupComplete,
-        createdAt: user.createdAt
-      }
+      user,
     });
-
   } catch (error) {
-    console.error('Google Sign-In Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Authentication failed',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Authentication failed', error: error.message });
   }
 });
 
-// 2. Check Username Availability
 router.post('/check-username', async (req, res) => {
   try {
     const { username } = req.body;
-
     if (!username) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username is required'
-      });
+      return res.status(400).json({ success: false, message: 'Username is required' });
     }
-
-    // Validate username format
     if (!validateUsername(username)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid username format' });
     }
 
-    // Check if username exists (case-insensitive)
-    const existingUser = await User.findOne({
-      username: username.toLowerCase()
-    });
-
-    if (existingUser) {
-      // Generate suggestions
-      const suggestions = await generateUsernameSuggestions(username);
-
-      return res.status(200).json({
-        success: true,
-        available: false,
-        suggestions: suggestions
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      available: true
-    });
-
+    const existingUser = await User.findOne({ username: String(username).toLowerCase() });
+    return res.status(200).json({ success: true, available: !existingUser, suggestions: [] });
   } catch (error) {
-    console.error('Check Username Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to check username',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to check username', error: error.message });
   }
 });
 
-// 3. Complete Setup (After Google Sign-In)
 router.post('/complete-setup', async (req, res) => {
   try {
     const { firebaseUid, username, password } = req.body;
-
     if (!firebaseUid || !username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Firebase UID, username, and password are required'
-      });
+      return res.status(400).json({ success: false, message: 'firebaseUid, username and password are required' });
     }
 
-    // Validate username format
     if (!validateUsername(username)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid username format' });
     }
 
-    // Check if username is available
-    const existingUsername = await User.findOne({
-      username: username.toLowerCase()
-    });
-
-    if (existingUsername) {
-      const suggestions = await generateUsernameSuggestions(username);
-      return res.status(400).json({
-        success: false,
-        message: 'Username already taken',
-        suggestions: suggestions
-      });
+    const existingUsername = await User.findOne({ username: String(username).toLowerCase() });
+    if (existingUsername && existingUsername.firebaseUid !== firebaseUid) {
+      return res.status(400).json({ success: false, message: 'Username already taken' });
     }
 
-    // Find user by firebaseUid
     const user = await User.findOne({ firebaseUid });
-
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    if (user.username && String(user.username).trim() && String(user.username).toLowerCase() !== String(username).toLowerCase()) {
+      return res.status(409).json({ success: false, message: 'Username cannot be changed once set' });
+    }
 
-    // Update user
-    user.username = username.toLowerCase();
-    user.password = hashedPassword;
+    user.username = String(username).toLowerCase();
+    user.password = await bcrypt.hash(password, 10);
     user.setupComplete = true;
+    user.searchableTerms = generateSearchableTerms(user);
     await user.save();
 
-    return res.status(200).json({
-      success: true,
-      message: 'Setup completed successfully',
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        balance: user.balance
-      }
-    });
-
+    return res.status(200).json({ success: true, message: 'Setup completed successfully', user });
   } catch (error) {
-    console.error('Complete Setup Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to complete setup',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to complete setup', error: error.message });
   }
 });
 
-// 4. Username/Password Login
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-
     if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username and password are required'
-      });
+      return res.status(400).json({ success: false, message: 'Username and password are required' });
     }
 
-    // Find user by username (case-insensitive)
-    const user = await User.findOne({
-      username: username.toLowerCase()
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
+    const user = await User.findOne({ username: String(username).toLowerCase() });
+    if (!user || !user.password) {
+      return res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
 
-    // Check if user has completed setup
-    if (!user.setupComplete || !user.password) {
-      return res.status(401).json({
-        success: false,
-        message: 'Please complete setup first using Google Sign-In'
-      });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
+      return res.status(401).json({ success: false, message: 'Invalid username or password' });
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid username or password'
-      });
-    }
-
-    // Update last login
     user.lastLogin = Date.now();
     await user.save();
 
-    return res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        balance: user.balance,
-        createdAt: user.createdAt
-      }
-    });
-
+    return res.status(200).json({ success: true, message: 'Login successful', user });
   } catch (error) {
-    console.error('Login Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Login failed',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Login failed', error: error.message });
   }
 });
 
-// 5. Get Current User Details
 router.get('/user', verifyToken, async (req, res) => {
   try {
     const user = await User.findOne({ firebaseUid: req.user.uid });
-
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
-
-    return res.status(200).json({
-      success: true,
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        mobile: user.mobile,
-        dob: user.dob,
-        gender: user.gender,
-        occupation: user.occupation,
-        country: user.country,
-        bio: user.bio,
-        fcmToken: user.fcmToken,
-        isOnline: user.isOnline,
-        lastOnline: user.lastOnline,
-        privacy: user.privacy,
-        currencySymbol: user.currencySymbol,
-        balance: user.balance,
-        setupComplete: user.setupComplete,
-        googleDriveConnected: user.googleDriveConnected,
-        createdAt: user.createdAt
-      }
-    });
-
+    return res.status(200).json({ success: true, user });
   } catch (error) {
-    console.error('Get User Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to fetch user details',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to fetch user details', error: error.message });
   }
 });
 
-// 6. Lookup Users By Phones
 router.post('/users-by-phones', verifyToken, async (req, res) => {
   try {
-    const { phones } = req.body;
-
-    if (!Array.isArray(phones)) {
-      return res.status(400).json({
-        success: false,
-        message: 'phones array is required'
-      });
-    }
-
-    const normalized = Array.from(new Set(
-      phones.map(normalizePhoneForLookup).filter(Boolean)
-    ));
-
-    if (normalized.length === 0) {
+    const phones = Array.isArray(req.body?.phones) ? req.body.phones : [];
+    if (!phones.length) {
       return res.status(200).json({ success: true, users: [] });
     }
 
-    // Search for both normalized (10 digits) and original formats (with country code)
-    const searchPhones = new Set([
-      ...normalized,  // 10-digit format: "9876543210"
-      ...phones       // Original format: "+919876543210"
-    ]);
+    const normalizedInput = [...new Set(phones.map(normalizePhoneForLookup).filter(Boolean))];
+    if (!normalizedInput.length) {
+      return res.status(200).json({ success: true, users: [] });
+    }
 
-    const users = await User.find({ mobile: { $in: Array.from(searchPhones) } })
-      .select('displayName mobile photoURL firebaseUid username')
+    const activeLinks = await PhoneLink.find({
+      phoneNormalized: { $in: normalizedInput },
+      isCurrent: true,
+    }).lean();
+
+    const historicalLinks = await PhoneLink.find({
+      phoneNormalized: { $in: normalizedInput },
+      isCurrent: false,
+    })
+      .sort({ updatedAt: -1 })
       .lean();
 
-    const sanitized = users.map(user => ({
-      id: user._id,
-      userId: user.firebaseUid || user._id.toString(),
-      firebaseUid: user.firebaseUid,
-      username: user.username || '',
-      displayName: user.displayName,
-      photoURL: user.photoURL || null,
-      mobile: normalizePhoneForLookup(user.mobile) || user.mobile,
-    }));
+    const activeByPhone = new Map();
+    activeLinks.forEach(item => activeByPhone.set(String(item.phoneNormalized), item));
 
-    return res.status(200).json({
-      success: true,
-      users: sanitized
+    const latestHistoricalByPhone = new Map();
+    historicalLinks.forEach(item => {
+      const key = String(item.phoneNormalized);
+      if (!latestHistoricalByPhone.has(key)) {
+        latestHistoricalByPhone.set(key, item);
+      }
     });
+
+    const userIds = new Set([
+      ...activeLinks.map(item => String(item.userId || '')),
+      ...historicalLinks.map(item => String(item.userId || '')),
+    ]);
+
+    const users = await User.find({ firebaseUid: { $in: Array.from(userIds).filter(Boolean) } })
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized')
+      .lean();
+    const userById = new Map(users.map(item => [String(item.firebaseUid), item]));
+    const fallbackUsers = await User.find({
+      $or: [
+        { mobileNormalized: { $in: normalizedInput } },
+        { mobile: { $in: phones.map(normalizeFullPhone).filter(Boolean) } },
+      ],
+    })
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized')
+      .lean();
+    const fallbackByPhone = new Map();
+    fallbackUsers.forEach(item => {
+      const key = String(item.mobileNormalized || normalizePhoneForLookup(item.mobile));
+      if (key) {
+        fallbackByPhone.set(key, item);
+      }
+    });
+
+    const result = [];
+
+    for (const phone of normalizedInput) {
+      const active = activeByPhone.get(phone);
+      if (active) {
+        const owner = userById.get(String(active.userId));
+        if (owner) {
+          result.push({
+            id: owner._id,
+            userId: owner.firebaseUid,
+            firebaseUid: owner.firebaseUid,
+            username: owner.username || '',
+            displayName: owner.displayName || 'User',
+            photoURL: owner.photoURL || null,
+            mobile: owner.mobile || '',
+            normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
+            status: 'app_user',
+            queriedPhone: phone,
+            currentPhone: owner.mobile || '',
+          });
+        }
+        continue;
+      }
+
+      const historical = latestHistoricalByPhone.get(phone);
+      if (historical) {
+        const owner = userById.get(String(historical.userId));
+        if (owner) {
+          result.push({
+            id: owner._id,
+            userId: owner.firebaseUid,
+            firebaseUid: owner.firebaseUid,
+            username: owner.username || '',
+            displayName: owner.displayName || 'User',
+            photoURL: owner.photoURL || null,
+            mobile: owner.mobile || '',
+            normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
+            status: 'number_changed',
+            queriedPhone: phone,
+            currentPhone: owner.mobile || '',
+            oldPhone: phone,
+          });
+        }
+      }
+
+      const fallback = fallbackByPhone.get(phone);
+      if (fallback) {
+        result.push({
+          id: fallback._id,
+          userId: fallback.firebaseUid,
+          firebaseUid: fallback.firebaseUid,
+          username: fallback.username || '',
+          displayName: fallback.displayName || 'User',
+          photoURL: fallback.photoURL || null,
+          mobile: fallback.mobile || '',
+          normalizedMobile: fallback.mobileNormalized || normalizePhoneForLookup(fallback.mobile),
+          status: 'app_user',
+          queriedPhone: phone,
+          currentPhone: fallback.mobile || '',
+        });
+      }
+    }
+
+    return res.status(200).json({ success: true, users: result });
   } catch (error) {
-    console.error('Users By Phones Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to fetch users',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to fetch users', error: error.message });
   }
 });
 
-// 7. Logout
-router.post('/logout', verifyToken, async (req, res) => {
-  try {
-    return res.status(200).json({
-      success: true,
-      message: 'Logout successful'
-    });
-  } catch (error) {
-    console.error('Logout Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Logout failed',
-      error: error.message
-    });
-  }
-});
-
-// 8. Check Phone Availability
 router.post('/check-phone', verifyToken, async (req, res) => {
   try {
-    const { mobile } = req.body;
-
-    if (!mobile) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number is required'
-      });
-    }
-
-    const currentUser = await User.findOne({ firebaseUid: req.user.uid });
-    if (!currentUser) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    const normalizedPhone = normalizePhoneForLookup(mobile);
+    const normalizedPhone = normalizePhoneForLookup(req.body?.mobile);
     if (!normalizedPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid phone number'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid phone number' });
     }
 
-    const taken = await isPhoneTaken(normalizedPhone, currentUser._id);
-
-    return res.status(200).json({
-      success: true,
-      available: !taken
-    });
+    const taken = await isPhoneTaken(normalizedPhone, req.user.uid);
+    return res.status(200).json({ success: true, available: !taken });
   } catch (error) {
-    console.error('Check Phone Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to check phone number',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: 'Failed to check phone number', error: error.message });
   }
 });
 
-// 9. Update Profile
-router.put('/update-profile', async (req, res) => {
+router.put('/update-profile', verifyToken, async (req, res) => {
   try {
     const {
-      firebaseUid,
       displayName,
       mobile,
       dob,
@@ -516,129 +391,272 @@ router.put('/update-profile', async (req, res) => {
       bio,
       isOnline,
       lastOnline,
-      privacy
-    } = req.body;
+      privacy,
+    } = req.body || {};
 
-    // Validation
-    if (!firebaseUid || !displayName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Firebase UID and display name are required'
-      });
+    const firebaseUid = req.user.uid;
+
+    if (!displayName || String(displayName).trim().length < 2) {
+      return res.status(400).json({ success: false, message: 'Valid display name is required' });
     }
 
-    // Validate display name
-    if (displayName.trim().length < 2) {
-      return res.status(400).json({
-        success: false,
-        message: 'Display name must be at least 2 characters'
-      });
-    }
-
-    // Validate username if provided
-    if (username) {
-      if (!validateUsername(username)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Username can only contain letters, numbers, dots, hyphens, and underscores'
-        });
-      }
-
-      // Check if username is already taken (and different from current user's username)
-      const user = await User.findOne({ firebaseUid });
-      const existingUser = await User.findOne({ username: username.toLowerCase() });
-      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Username already taken'
-        });
-      }
-    }
-
-    // Find user
     const user = await User.findOne({ firebaseUid });
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    if (mobile) {
-      const normalizedPhone = normalizePhoneForLookup(mobile);
-      if (normalizedPhone) {
-        const taken = await isPhoneTaken(normalizedPhone, user._id);
-        if (taken) {
-          return res.status(409).json({
-            success: false,
-            message: 'Phone number already taken'
-          });
-        }
+    const incomingUsername = String(username || '').trim().toLowerCase();
+    if (incomingUsername) {
+      if (!validateUsername(incomingUsername)) {
+        return res.status(400).json({ success: false, message: 'Invalid username format' });
+      }
+      if (user.username && String(user.username).trim() && String(user.username).toLowerCase() !== incomingUsername) {
+        return res.status(409).json({ success: false, message: 'Username cannot be changed once set' });
+      }
+      const takenUsername = await User.findOne({ username: incomingUsername, firebaseUid: { $ne: firebaseUid } });
+      if (takenUsername) {
+        return res.status(400).json({ success: false, message: 'Username already taken' });
+      }
+      if (!user.username) {
+        user.username = incomingUsername;
       }
     }
 
-    // Update existing fields
-    user.displayName = displayName.trim();
-    if (mobile) user.mobile = mobile;
+    const prevNormalized = String(user.mobileNormalized || '');
+    const nextFullPhone = mobile ? normalizeFullPhone(mobile) : String(user.mobile || '');
+    const nextNormalized = normalizePhoneForLookup(nextFullPhone);
+
+    if (mobile && nextNormalized && nextNormalized !== prevNormalized) {
+      const taken = await isPhoneTaken(nextNormalized, firebaseUid);
+      if (taken) {
+        return res.status(409).json({ success: false, message: 'Phone number already taken' });
+      }
+    }
+
+    user.displayName = String(displayName).trim();
+    if (mobile) {
+      user.mobile = nextFullPhone;
+      user.mobileNormalized = nextNormalized || null;
+    }
     if (dob) user.dob = new Date(dob);
     if (gender) user.gender = gender;
     if (occupation) user.occupation = occupation;
     if (country) user.country = country;
-    if (username) user.username = username.toLowerCase();
     if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
-
-    // Update chat-related fields
     if (fcmToken) user.fcmToken = fcmToken;
-    if (bio) user.bio = bio;
+    if (bio !== undefined) user.bio = bio;
     if (isOnline !== undefined) user.isOnline = isOnline;
     if (lastOnline) user.lastOnline = lastOnline;
     if (privacy) user.privacy = { ...user.privacy, ...privacy };
 
-    // Auto-generate searchableTerms from displayName, username, and mobile
-    user.searchableTerms = [
-      user.displayName.toLowerCase(),
-      user.username ? user.username.toLowerCase() : '',
-      user.mobile ? normalizePhoneForLookup(user.mobile) : ''
-    ].filter(Boolean);
-
+    user.searchableTerms = generateSearchableTerms(user);
     await user.save();
+
+    if (mobile && nextNormalized && nextNormalized !== prevNormalized) {
+      await syncPhoneLinks(firebaseUid, nextFullPhone, prevNormalized);
+    } else if (mobile && nextNormalized && !prevNormalized) {
+      await syncPhoneLinks(firebaseUid, nextFullPhone, prevNormalized);
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      user: {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        email: user.email,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        mobile: user.mobile,
-        dob: user.dob,
-        gender: user.gender,
-        occupation: user.occupation,
-        country: user.country,
-        username: user.username,
-        currencySymbol: user.currencySymbol,
-        fcmToken: user.fcmToken,
-        bio: user.bio,
-        isOnline: user.isOnline,
-        lastOnline: user.lastOnline,
-        privacy: user.privacy,
-        setupComplete: user.setupComplete,
-        balance: user.balance,
-        createdAt: user.createdAt
-      }
+      user,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to update profile', error: error.message });
+  }
+});
+
+router.post('/phone-claims/request', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+    const normalizedPhone = normalizePhoneForLookup(req.body?.phone || req.body?.mobile);
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ success: false, message: 'Valid phone is required' });
+    }
+
+    const activeOwner = await PhoneLink.findOne({ phoneNormalized: normalizedPhone, isCurrent: true }).lean();
+    if (!activeOwner) {
+      return res.status(404).json({ success: false, message: 'Phone has no current owner' });
+    }
+
+    if (String(activeOwner.userId) === String(requesterId)) {
+      return res.status(400).json({ success: false, message: 'Phone already linked to your account' });
+    }
+
+    const blocked = await PhoneClaim.findOne({
+      requesterId,
+      targetOwnerId: String(activeOwner.userId),
+      phoneNormalized: normalizedPhone,
+      status: 'blocked',
+      blockedByTarget: true,
+    }).lean();
+    if (blocked) {
+      return res.status(403).json({ success: false, message: 'You are blocked from requesting this number' });
+    }
+
+    const rejectedCount = await PhoneClaim.countDocuments({
+      requesterId,
+      targetOwnerId: String(activeOwner.userId),
+      phoneNormalized: normalizedPhone,
+      status: 'rejected',
     });
 
-  } catch (error) {
-    console.error('Update Profile Error:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to update profile',
-      error: error.message
+    const existingPending = await PhoneClaim.findOne({
+      requesterId,
+      targetOwnerId: String(activeOwner.userId),
+      phoneNormalized: normalizedPhone,
+      status: 'pending',
     });
+
+    if (existingPending) {
+      return res.status(200).json({ success: true, claim: existingPending, message: 'Request already pending' });
+    }
+
+    const claim = await PhoneClaim.create({
+      requesterId,
+      targetOwnerId: String(activeOwner.userId),
+      phoneNormalized: normalizedPhone,
+      status: 'pending',
+      rejectCount: rejectedCount,
+    });
+
+    console.log('[PHONE_CLAIM] Notify target owner', {
+      targetOwnerId: String(activeOwner.userId),
+      requesterId,
+      phoneNormalized: normalizedPhone,
+    });
+
+    return res.status(200).json({
+      success: true,
+      claim,
+      requiresBlockOption: rejectedCount >= 2,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to create claim request', error: error.message });
   }
+});
+
+router.get('/phone-claims/inbox', verifyToken, async (req, res) => {
+  try {
+    const rows = await PhoneClaim.find({
+      targetOwnerId: req.user.uid,
+      status: 'pending',
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({ success: true, claims: rows });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to load claim inbox', error: error.message });
+  }
+});
+
+router.post('/phone-claims/respond', verifyToken, async (req, res) => {
+  try {
+    const targetOwnerId = req.user.uid;
+    const { claimId, action, pinApproved, biometricApproved } = req.body || {};
+
+    const claim = await PhoneClaim.findById(String(claimId || ''));
+    if (!claim) {
+      return res.status(404).json({ success: false, message: 'Claim not found' });
+    }
+
+    if (String(claim.targetOwnerId) !== String(targetOwnerId)) {
+      return res.status(403).json({ success: false, message: 'Not allowed to respond to this claim' });
+    }
+
+    if (claim.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Claim is no longer pending' });
+    }
+
+    if (action === 'reject') {
+      claim.status = 'rejected';
+      claim.rejectCount = Number(claim.rejectCount || 0) + 1;
+      await claim.save();
+      return res.status(200).json({ success: true, claim, message: 'Request rejected' });
+    }
+
+    if (action === 'block') {
+      claim.status = 'blocked';
+      claim.blockedByTarget = true;
+      await claim.save();
+      return res.status(200).json({ success: true, claim, message: 'Requester blocked' });
+    }
+
+    if (action !== 'approve') {
+      return res.status(400).json({ success: false, message: 'Invalid action' });
+    }
+
+    if (!pinApproved && !biometricApproved) {
+      return res.status(400).json({ success: false, message: 'PIN or biometric approval is required' });
+    }
+
+    const phoneNormalized = String(claim.phoneNormalized || '');
+    const requesterId = String(claim.requesterId || '');
+
+    const activeOwnerLink = await PhoneLink.findOne({
+      phoneNormalized,
+      isCurrent: true,
+      userId: targetOwnerId,
+    });
+
+    if (!activeOwnerLink) {
+      claim.status = 'rejected';
+      await claim.save();
+      return res.status(409).json({ success: false, message: 'Phone no longer owned by target user' });
+    }
+
+    const ownerUser = await User.findOne({ firebaseUid: targetOwnerId });
+    const requesterUser = await User.findOne({ firebaseUid: requesterId });
+    if (!ownerUser || !requesterUser) {
+      return res.status(404).json({ success: false, message: 'Requester or owner account not found' });
+    }
+
+    await PhoneLink.updateMany(
+      { phoneNormalized, isCurrent: true },
+      { $set: { isCurrent: false, validTo: new Date() } },
+    );
+
+    await syncPhoneLinks(requesterId, activeOwnerLink.fullPhone || phoneNormalized, '');
+
+    if (String(ownerUser.mobileNormalized || '') === phoneNormalized) {
+      ownerUser.mobile = null;
+      ownerUser.mobileNormalized = null;
+      ownerUser.searchableTerms = generateSearchableTerms(ownerUser);
+      await ownerUser.save();
+    }
+
+    requesterUser.mobile = activeOwnerLink.fullPhone || phoneNormalized;
+    requesterUser.mobileNormalized = phoneNormalized;
+    requesterUser.searchableTerms = generateSearchableTerms(requesterUser);
+    await requesterUser.save();
+
+    claim.status = 'approved';
+    await claim.save();
+
+    console.log('[PHONE_CLAIM] Approved transfer', {
+      phoneNormalized,
+      from: targetOwnerId,
+      to: requesterId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Phone transfer approved',
+      claim,
+      oldOwnerNeedsNewPhone: true,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to respond to claim', error: error.message });
+  }
+});
+
+router.post('/logout', verifyToken, async (req, res) => {
+  return res.status(200).json({ success: true, message: 'Logout successful' });
 });
 
 module.exports = router;
