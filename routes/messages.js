@@ -82,6 +82,7 @@ router.post('/send', verifyToken, async (req, res) => {
           type: 'chat_message',
           conversationId,
           senderId,
+          senderName,
           messageText,
           timestamp: Date.now().toString()
         },
