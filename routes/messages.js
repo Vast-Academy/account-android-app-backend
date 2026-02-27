@@ -74,7 +74,10 @@ router.post('/send', verifyToken, async (req, res) => {
     try {
       console.log('📤 [SEND] Sending FCM notification to:', receiver.fcmToken.substring(0, 20) + '...');
       const senderUser = await User.findOne({ firebaseUid: senderId });
-      const senderName = senderUser?.displayName || 'New Message';
+      const senderName = senderUser?.displayName || senderUser?.username || 'New Message';
+      const senderPhone = String(
+        senderUser?.mobileNormalized || senderUser?.mobile || ''
+      ).trim();
 
       await admin.messaging().send({
         token: receiver.fcmToken,
@@ -83,6 +86,7 @@ router.post('/send', verifyToken, async (req, res) => {
           conversationId,
           senderId,
           senderName,
+          senderPhone,
           messageText,
           timestamp: Date.now().toString()
         },
