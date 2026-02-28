@@ -14,11 +14,29 @@ const STATUS_ORDER = {
 };
 
 const DELIVERY_TTL_DAYS = 14;
+const PENDING_TTL_HOURS = 24;
+const DELIVERED_TTL_HOURS = 1;
 
 const nextExpiryDate = () => {
   const now = new Date();
   now.setDate(now.getDate() + DELIVERY_TTL_DAYS);
   return now;
+};
+
+const expiryForStatus = status => {
+  const normalized = String(status || '').toLowerCase();
+  const now = Date.now();
+  if (normalized === 'delivered' || normalized === 'read') {
+    return new Date(now + DELIVERED_TTL_HOURS * 60 * 60 * 1000);
+  }
+  if (
+    normalized === 'accepted' ||
+    normalized === 'pushed' ||
+    normalized === 'failed'
+  ) {
+    return new Date(now + PENDING_TTL_HOURS * 60 * 60 * 1000);
+  }
+  return nextExpiryDate();
 };
 
 const shouldAdvanceStatus = (currentStatus, nextStatus) => {
@@ -64,6 +82,7 @@ const saveDeliveryState = async params => {
     senderId,
     receiverId,
     messageText,
+    messageTimestamp = 0,
     status,
     lastError = null,
   } = params;
@@ -74,7 +93,8 @@ const saveDeliveryState = async params => {
     senderId: String(senderId || ''),
     receiverId: String(receiverId || ''),
     messageText: String(messageText || ''),
-    expiresAt: nextExpiryDate(),
+    messageTimestamp: Number(messageTimestamp || 0),
+    expiresAt: expiryForStatus(status),
     updatedAt: now,
   };
 
@@ -163,6 +183,7 @@ router.post('/send', verifyToken, async (req, res) => {
       senderId,
       receiverId: receiverUid,
       messageText: trimmedMessageText,
+      messageTimestamp: payloadTimestamp,
       status: 'accepted',
     });
 
@@ -211,6 +232,7 @@ router.post('/send', verifyToken, async (req, res) => {
         senderId,
         receiverId: receiverUid,
         messageText: trimmedMessageText,
+        messageTimestamp: payloadTimestamp,
         status: 'pushed',
       });
 
@@ -226,6 +248,7 @@ router.post('/send', verifyToken, async (req, res) => {
         senderId,
         receiverId: receiverUid,
         messageText: trimmedMessageText,
+        messageTimestamp: payloadTimestamp,
         status: 'accepted',
         lastError: fcmError?.message || 'FCM send failed',
       });
@@ -297,7 +320,7 @@ router.post('/delivery-receipt', verifyToken, async (req, res) => {
         delivery.deliveredAt = new Date();
       }
     }
-    delivery.expiresAt = nextExpiryDate();
+    delivery.expiresAt = expiryForStatus(normalizedStatus);
     await delivery.save();
 
     const sender = await User.findOne({firebaseUid: String(delivery.senderId || '').trim()});
@@ -335,5 +358,71 @@ router.post('/delivery-receipt', verifyToken, async (req, res) => {
   }
 });
 
-module.exports = router;
+// GET /api/messages/pending-sync
+router.get('/pending-sync', verifyToken, async (req, res) => {
+  try {
+    const uid = String(req.user?.uid || '').trim();
+    const conversationId = String(req.query?.conversationId || '').trim();
+    const sinceTimestamp = Number.parseInt(String(req.query?.sinceTimestamp || '0'), 10) || 0;
+    const limitRaw = Number.parseInt(String(req.query?.limit || '100'), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 100;
 
+    if (!uid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized user',
+      });
+    }
+    if (!conversationId) {
+      return res.status(400).json({
+        success: false,
+        message: 'conversationId is required',
+      });
+    }
+
+    const participants = conversationId.split('_').filter(Boolean);
+    if (!participants.includes(uid)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied for conversation',
+      });
+    }
+
+    const rows = await MessageDelivery.find({
+      conversationId,
+      receiverId: uid,
+      status: {$in: ['accepted', 'pushed', 'delivered', 'read']},
+      messageTimestamp: {$gt: sinceTimestamp},
+    })
+      .sort({messageTimestamp: 1, createdAt: 1})
+      .limit(limit)
+      .lean();
+
+    const messages = rows.map(row => ({
+      messageId: String(row.messageId || ''),
+      conversationId: String(row.conversationId || ''),
+      senderId: String(row.senderId || ''),
+      receiverId: String(row.receiverId || ''),
+      messageText: String(row.messageText || ''),
+      messageType: 'text',
+      timestamp: Number(row.messageTimestamp || 0) || new Date(row.createdAt || Date.now()).getTime(),
+      status: String(row.status || 'accepted'),
+    }));
+
+    return res.status(200).json({
+      success: true,
+      messages,
+      count: messages.length,
+      conversationId,
+      sinceTimestamp,
+    });
+  } catch (error) {
+    console.error('[PENDING_SYNC] Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+module.exports = router;

@@ -28,6 +28,11 @@ const messageDeliverySchema = new mongoose.Schema(
       default: '',
       maxlength: 4000,
     },
+    messageTimestamp: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
     status: {
       type: String,
       enum: ['accepted', 'pushed', 'delivered', 'read', 'failed'],
@@ -53,7 +58,6 @@ const messageDeliverySchema = new mongoose.Schema(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
   },
   {
@@ -65,4 +69,3 @@ const messageDeliverySchema = new mongoose.Schema(
 messageDeliverySchema.index({expiresAt: 1}, {expireAfterSeconds: 0});
 
 module.exports = mongoose.model('MessageDelivery', messageDeliverySchema);
-
