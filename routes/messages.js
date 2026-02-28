@@ -15,7 +15,7 @@ const STATUS_ORDER = {
 
 const DELIVERY_TTL_DAYS = 14;
 const PENDING_TTL_HOURS = 24;
-const DELIVERED_TTL_HOURS = 1;
+const DELIVERED_TTL_MINUTES = 2;
 
 const nextExpiryDate = () => {
   const now = new Date();
@@ -27,7 +27,7 @@ const expiryForStatus = status => {
   const normalized = String(status || '').toLowerCase();
   const now = Date.now();
   if (normalized === 'delivered' || normalized === 'read') {
-    return new Date(now + DELIVERED_TTL_HOURS * 60 * 60 * 1000);
+    return new Date(now + DELIVERED_TTL_MINUTES * 60 * 1000);
   }
   if (
     normalized === 'accepted' ||
