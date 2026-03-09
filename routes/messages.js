@@ -398,7 +398,27 @@ router.get('/pending-sync', verifyToken, async (req, res) => {
       .limit(limit)
       .lean();
 
+    const senderIds = [...new Set(rows.map(row => String(row.senderId || '').trim()).filter(Boolean))];
+    const senderUsers = senderIds.length
+      ? await User.find({firebaseUid: {$in: senderIds}})
+          .select('firebaseUid displayName username mobile mobileNormalized')
+          .lean()
+      : [];
+    const senderById = new Map(
+      senderUsers.map(user => [String(user.firebaseUid || '').trim(), user]),
+    );
+
     const messages = rows.map(row => ({
+      senderName: String(
+        senderById.get(String(row.senderId || '').trim())?.displayName ||
+          senderById.get(String(row.senderId || '').trim())?.username ||
+          ''
+      ),
+      senderPhone: String(
+        senderById.get(String(row.senderId || '').trim())?.mobileNormalized ||
+          senderById.get(String(row.senderId || '').trim())?.mobile ||
+          ''
+      ),
       messageId: String(row.messageId || ''),
       conversationId: String(row.conversationId || ''),
       senderId: String(row.senderId || ''),
