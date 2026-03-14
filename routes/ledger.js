@@ -18,6 +18,28 @@ const normalizeAmount = (value) => {
   return Math.abs(parsed);
 };
 
+const normalizeEditHistoryJson = (value) => {
+  const rawList = Array.isArray(value)
+    ? value
+    : typeof value === 'string' && value.trim()
+    ? (() => {
+        try {
+          const parsed = JSON.parse(value);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          return [];
+        }
+      })()
+    : [];
+
+  const cleaned = rawList
+    .map(item => Number(item))
+    .filter(item => Number.isFinite(item) && item >= 0)
+    .slice(-10);
+
+  return cleaned.length > 0 ? JSON.stringify(cleaned) : '';
+};
+
 const isMongoObjectId = value => /^[a-f\\d]{24}$/i.test(String(value || ''));
 
 // POST /api/ledger/sync
@@ -36,6 +58,8 @@ router.post('/sync', verifyToken, async (req, res) => {
       type,
       entryType,
       contactRecordId,
+      editHistory,
+      editHistoryJson,
     } = req.body || {};
 
     if (!sourceUserId) {
@@ -55,6 +79,9 @@ router.post('/sync', verifyToken, async (req, res) => {
     const opValue = normalizeOp(op);
     const entryTypeValue = normalizeEntryType(entryType || type);
     const amountValue = normalizeAmount(amount);
+    const normalizedEditHistoryJson = normalizeEditHistoryJson(
+      editHistoryJson || editHistory
+    );
 
     if (opValue === 'create' && amountValue <= 0) {
       return res.status(400).json({
@@ -118,6 +145,8 @@ router.post('/sync', verifyToken, async (req, res) => {
       entryType: String(entryTypeValue),
       amount: String(amountValue),
       note: String(note || ''),
+      editHistory: String(normalizedEditHistoryJson || ''),
+      editHistoryJson: String(normalizedEditHistoryJson || ''),
       timestamp: String(Number(timestamp || Date.now())),
       idempotencyKey: String(
         idempotencyKey || `ledger:${String(sourceUserId)}:${String(originTxnId)}:${String(opValue)}`
