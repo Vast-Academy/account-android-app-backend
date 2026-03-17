@@ -16,6 +16,12 @@ const STATUS_ORDER = {
 const DELIVERY_TTL_DAYS = 14;
 const PENDING_TTL_HOURS = 24;
 const DELIVERED_TTL_MINUTES = 2;
+const FEATURE_NOTIF_PAYLOAD_V3_ENABLED =
+  String(process.env.NOTIF_PAYLOAD_V3_ENABLED || 'true').toLowerCase() !==
+  'false';
+const FEATURE_CHAT_PUSH_INCLUDE_NOTIFICATION_BLOCK =
+  String(process.env.NOTIF_CHAT_INCLUDE_NOTIFICATION_BLOCK || 'false')
+    .toLowerCase() === 'true';
 
 const nextExpiryDate = () => {
   const now = new Date();
@@ -125,6 +131,18 @@ const saveDeliveryState = async params => {
   );
 };
 
+const createPushEventId = ({
+  prefix = 'chat',
+  messageId = '',
+  senderId = '',
+  receiverId = '',
+}) => {
+  const mid = String(messageId || '').trim();
+  const sid = String(senderId || '').trim();
+  const rid = String(receiverId || '').trim();
+  return `${prefix}_${mid || 'na'}_${sid || 'na'}_${rid || 'na'}_${Date.now()}`;
+};
+
 // POST /api/messages/send
 router.post('/send', verifyToken, async (req, res) => {
   try {
@@ -136,6 +154,7 @@ router.post('/send', verifyToken, async (req, res) => {
       messageId: incomingMessageId,
       messageType = 'text',
       timestamp,
+      contactRecordId,
     } = req.body || {};
 
     const trimmedConversationId = String(conversationId || '').trim();
@@ -192,6 +211,13 @@ router.post('/send', verifyToken, async (req, res) => {
     const senderPhone = String(
       senderUser?.mobileNormalized || senderUser?.mobile || ''
     ).trim();
+    const normalizedContactRecordId = String(contactRecordId || '').trim();
+    const pushEventId = createPushEventId({
+      prefix: 'chat',
+      messageId,
+      senderId,
+      receiverId: receiverUid,
+    });
 
     if (!receiver.fcmToken) {
       return res.status(200).json({
@@ -204,27 +230,38 @@ router.post('/send', verifyToken, async (req, res) => {
     }
 
     try {
-      await admin.messaging().send({
+      const pushData = {
+        type: 'chat_message',
+        messageId,
+        conversationId: trimmedConversationId,
+        senderId,
+        senderName,
+        senderPhone,
+        contactRecordId: normalizedContactRecordId,
+        messageText: trimmedMessageText,
+        messageType: String(messageType || 'text'),
+        timestamp: String(payloadTimestamp),
+      };
+      if (FEATURE_NOTIF_PAYLOAD_V3_ENABLED) {
+        pushData.notifVersion = 'v3';
+        pushData.eventId = pushEventId;
+      }
+
+      const pushPayload = {
         token: receiver.fcmToken,
-        data: {
-          type: 'chat_message',
-          messageId,
-          conversationId: trimmedConversationId,
-          senderId,
-          senderName,
-          senderPhone,
-          messageText: trimmedMessageText,
-          messageType: String(messageType || 'text'),
-          timestamp: String(payloadTimestamp),
-        },
-        notification: {
-          title: senderName,
-          body: trimmedMessageText.slice(0, 100),
-        },
+        data: pushData,
         android: {
           priority: 'high',
         },
-      });
+      };
+      if (FEATURE_CHAT_PUSH_INCLUDE_NOTIFICATION_BLOCK) {
+        pushPayload.notification = {
+          title: senderName,
+          body: trimmedMessageText.slice(0, 100),
+        };
+      }
+
+      await admin.messaging().send(pushPayload);
 
       await saveDeliveryState({
         messageId,
@@ -240,6 +277,8 @@ router.post('/send', verifyToken, async (req, res) => {
         success: true,
         messageId,
         status: 'pushed',
+        notifVersion: FEATURE_NOTIF_PAYLOAD_V3_ENABLED ? 'v3' : 'v2',
+        eventId: FEATURE_NOTIF_PAYLOAD_V3_ENABLED ? pushEventId : undefined,
       });
     } catch (fcmError) {
       await saveDeliveryState({
@@ -326,15 +365,26 @@ router.post('/delivery-receipt', verifyToken, async (req, res) => {
     const sender = await User.findOne({firebaseUid: String(delivery.senderId || '').trim()});
     if (sender?.fcmToken) {
       try {
+        const receiptEventId = createPushEventId({
+          prefix: `receipt_${normalizedStatus}`,
+          messageId: String(delivery.messageId || ''),
+          senderId: String(delivery.receiverId || ''),
+          receiverId: String(delivery.senderId || ''),
+        });
+        const receiptData = {
+          type: 'delivery_receipt',
+          messageId: String(delivery.messageId || ''),
+          status: String(delivery.status || normalizedStatus),
+          conversationId: String(delivery.conversationId || ''),
+          timestamp: String(Date.now()),
+        };
+        if (FEATURE_NOTIF_PAYLOAD_V3_ENABLED) {
+          receiptData.notifVersion = 'v3';
+          receiptData.eventId = receiptEventId;
+        }
         await admin.messaging().send({
           token: sender.fcmToken,
-          data: {
-            type: 'delivery_receipt',
-            messageId: String(delivery.messageId || ''),
-            status: String(delivery.status || normalizedStatus),
-            conversationId: String(delivery.conversationId || ''),
-            timestamp: String(Date.now()),
-          },
+          data: receiptData,
           android: {
             priority: 'high',
           },
