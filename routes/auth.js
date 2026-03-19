@@ -273,7 +273,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
     ]);
 
     const users = await User.find({ firebaseUid: { $in: Array.from(userIds).filter(Boolean) } })
-      .select('firebaseUid username displayName photoURL mobile mobileNormalized')
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState')
       .lean();
     const userById = new Map(users.map(item => [String(item.firebaseUid), item]));
     const fallbackUsers = await User.find({
@@ -282,7 +282,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
         { mobile: { $in: phones.map(normalizeFullPhone).filter(Boolean) } },
       ],
     })
-      .select('firebaseUid username displayName photoURL mobile mobileNormalized')
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState')
       .lean();
     const fallbackByPhone = new Map();
     fallbackUsers.forEach(item => {
@@ -308,6 +308,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
             photoURL: owner.photoURL || null,
             mobile: owner.mobile || '',
             normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
+            appInstallState: owner.appInstallState || 'installed',
             status: 'app_user',
             queriedPhone: phone,
             currentPhone: owner.mobile || '',
@@ -329,6 +330,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
             photoURL: owner.photoURL || null,
             mobile: owner.mobile || '',
             normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
+            appInstallState: owner.appInstallState || 'installed',
             status: 'number_changed',
             queriedPhone: phone,
             currentPhone: owner.mobile || '',
@@ -348,6 +350,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
           photoURL: fallback.photoURL || null,
           mobile: fallback.mobile || '',
           normalizedMobile: fallback.mobileNormalized || normalizePhoneForLookup(fallback.mobile),
+          appInstallState: fallback.appInstallState || 'installed',
           status: 'app_user',
           queriedPhone: phone,
           currentPhone: fallback.mobile || '',
@@ -444,7 +447,13 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     if (country) user.country = country;
     if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
-    if (fcmToken) user.fcmToken = fcmToken;
+    if (fcmToken) {
+      user.fcmToken = fcmToken;
+      user.appInstallState = 'installed';
+      user.fcmTokenUpdatedAt = new Date();
+      user.fcmTokenStatus = 'ok';
+      user.fcmTokenLastError = null;
+    }
     if (bio !== undefined) user.bio = bio;
     if (isOnline !== undefined) user.isOnline = isOnline;
     if (lastOnline) user.lastOnline = lastOnline;

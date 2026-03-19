@@ -165,7 +165,7 @@ router.post('/search', verifyToken, async (req, res) => {
         { displayName: { $regex: query, $options: 'i' } },
       ],
     })
-      .select('firebaseUid username displayName photoURL mobile email privacy')
+      .select('firebaseUid username displayName photoURL mobile email privacy appInstallState')
       .limit(20)
       .lean();
 
@@ -177,6 +177,7 @@ router.post('/search', verifyToken, async (req, res) => {
         displayName: user.displayName,
         photoURL: user.photoURL,
         email: user.email,
+        appInstallState: user.appInstallState || 'installed',
       };
       if (user.privacy?.phoneNumberVisible !== false) {
         result.mobile = user.mobile;
@@ -228,6 +229,7 @@ router.post('/update-fcm-token', verifyToken, async (req, res) => {
     }
 
     user.fcmToken = nextToken;
+    user.appInstallState = 'installed';
     user.fcmTokenUpdatedAt = new Date();
     user.fcmTokenStatus = 'ok';
     user.fcmTokenLastError = null;

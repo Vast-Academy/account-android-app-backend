@@ -57,6 +57,11 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  appInstallState: {
+    type: String,
+    enum: ['installed', 'uninstalled'],
+    default: 'installed'
+  },
   fcmTokenUpdatedAt: {
     type: Date,
     default: null
