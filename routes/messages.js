@@ -19,9 +19,6 @@ const DELIVERED_TTL_MINUTES = 2;
 const FEATURE_NOTIF_PAYLOAD_V3_ENABLED =
   String(process.env.NOTIF_PAYLOAD_V3_ENABLED || 'true').toLowerCase() !==
   'false';
-const FEATURE_CHAT_PUSH_INCLUDE_NOTIFICATION_BLOCK =
-  String(process.env.NOTIF_CHAT_INCLUDE_NOTIFICATION_BLOCK || 'false')
-    .toLowerCase() === 'true';
 
 const nextExpiryDate = () => {
   const now = new Date();
@@ -250,16 +247,14 @@ router.post('/send', verifyToken, async (req, res) => {
       const pushPayload = {
         token: receiver.fcmToken,
         data: pushData,
+        notification: {
+          title: senderName,
+          body: trimmedMessageText.slice(0, 100),
+        },
         android: {
           priority: 'high',
         },
       };
-      if (FEATURE_CHAT_PUSH_INCLUDE_NOTIFICATION_BLOCK) {
-        pushPayload.notification = {
-          title: senderName,
-          body: trimmedMessageText.slice(0, 100),
-        };
-      }
 
       await admin.messaging().send(pushPayload);
 
