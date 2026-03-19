@@ -143,6 +143,7 @@ const createPushEventId = ({
 // POST /api/messages/send
 router.post('/send', verifyToken, async (req, res) => {
   try {
+    const requestStartedAt = Date.now();
     const senderId = String(req.user?.uid || '').trim();
     const {
       conversationId,
@@ -161,6 +162,7 @@ router.post('/send', verifyToken, async (req, res) => {
       String(incomingMessageId || '').trim() ||
       `msg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const payloadTimestamp = Number(timestamp || Date.now());
+    const upstreamLatencyMs = Math.max(0, requestStartedAt - payloadTimestamp);
 
     if (!trimmedConversationId || !senderId || !trimmedReceiverId || !trimmedMessageText) {
       return res.status(400).json({
@@ -192,6 +194,14 @@ router.post('/send', verifyToken, async (req, res) => {
       });
     }
 
+    console.log('[CHAT_LATENCY][SEND_START]', {
+      messageId,
+      senderId,
+      receiverId: receiverUid,
+      conversationId: trimmedConversationId,
+      upstreamLatencyMs,
+    });
+
     // Persist acceptance before push attempt.
     await saveDeliveryState({
       messageId,
@@ -217,6 +227,11 @@ router.post('/send', verifyToken, async (req, res) => {
     });
 
     if (!receiver.fcmToken) {
+      console.log('[CHAT_LATENCY][FCM_SKIP_NO_TOKEN]', {
+        messageId,
+        receiverId: receiverUid,
+        totalServerMs: Date.now() - requestStartedAt,
+      });
       return res.status(200).json({
         success: true,
         messageId,
@@ -258,6 +273,13 @@ router.post('/send', verifyToken, async (req, res) => {
 
       await admin.messaging().send(pushPayload);
 
+      console.log('[CHAT_LATENCY][FCM_PUSHED]', {
+        messageId,
+        receiverId: receiverUid,
+        serverToPushMs: Date.now() - requestStartedAt,
+        upstreamLatencyMs,
+      });
+
       await saveDeliveryState({
         messageId,
         conversationId: trimmedConversationId,
@@ -276,6 +298,12 @@ router.post('/send', verifyToken, async (req, res) => {
         eventId: FEATURE_NOTIF_PAYLOAD_V3_ENABLED ? pushEventId : undefined,
       });
     } catch (fcmError) {
+      console.log('[CHAT_LATENCY][FCM_FAILED]', {
+        messageId,
+        receiverId: receiverUid,
+        serverToFailureMs: Date.now() - requestStartedAt,
+        error: String(fcmError?.message || fcmError || ''),
+      });
       await saveDeliveryState({
         messageId,
         conversationId: trimmedConversationId,
