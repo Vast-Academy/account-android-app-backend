@@ -221,6 +221,9 @@ router.post('/send', verifyToken, async (req, res) => {
     const senderPhone = String(
       senderUser?.mobileNormalized || senderUser?.mobile || ''
     ).trim();
+    const receiverAppInstallState = String(
+      receiver?.appInstallState || 'installed'
+    ).trim().toLowerCase();
     const normalizedContactRecordId = String(contactRecordId || '').trim();
     const pushEventId = createPushEventId({
       prefix: 'chat',
@@ -228,6 +231,27 @@ router.post('/send', verifyToken, async (req, res) => {
       senderId,
       receiverId: receiverUid,
     });
+
+    if (receiverAppInstallState === 'uninstalled') {
+      await saveDeliveryState({
+        messageId,
+        conversationId: trimmedConversationId,
+        senderId,
+        receiverId: receiverUid,
+        messageText: trimmedMessageText,
+        messageTimestamp: payloadTimestamp,
+        status: 'failed',
+        lastError: 'Receiver unavailable',
+      });
+      return res.status(410).json({
+        success: false,
+        code: 'RECEIVER_UNAVAILABLE',
+        messageId,
+        message: 'Receiver unavailable',
+        appInstallState: 'uninstalled',
+        retryable: false,
+      });
+    }
 
     if (!receiver.fcmToken) {
       console.log('[CHAT_LATENCY][FCM_SKIP_NO_TOKEN]', {
@@ -303,6 +327,24 @@ router.post('/send', verifyToken, async (req, res) => {
     } catch (fcmError) {
       if (isInvalidFcmTokenError(fcmError)) {
         await markUserAsUninstalled(receiverUid, fcmError);
+        await saveDeliveryState({
+          messageId,
+          conversationId: trimmedConversationId,
+          senderId,
+          receiverId: receiverUid,
+          messageText: trimmedMessageText,
+          messageTimestamp: payloadTimestamp,
+          status: 'failed',
+          lastError: 'Receiver unavailable',
+        });
+        return res.status(410).json({
+          success: false,
+          code: 'RECEIVER_UNAVAILABLE',
+          messageId,
+          message: 'Receiver unavailable',
+          appInstallState: 'uninstalled',
+          retryable: false,
+        });
       }
       console.log('[CHAT_LATENCY][FCM_FAILED]', {
         messageId,
