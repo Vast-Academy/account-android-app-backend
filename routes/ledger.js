@@ -3,6 +3,10 @@ const router = express.Router();
 const admin = require('../config/firebase');
 const User = require('../models/User');
 const { verifyToken } = require('../middleware/authMiddleware');
+const {
+  isInvalidFcmTokenError,
+  markUserAsUninstalled,
+} = require('../services/fcmTokenState');
 
 const normalizeOp = (value) => {
   return value === 'delete' || value === 'update' ? value : 'create';
@@ -41,40 +45,6 @@ const normalizeEditHistoryJson = (value) => {
 };
 
 const isMongoObjectId = value => /^[a-f\\d]{24}$/i.test(String(value || ''));
-const INVALID_FCM_ERROR_CODES = new Set([
-  'messaging/invalid-registration-token',
-  'messaging/registration-token-not-registered',
-  'registration-token-not-registered',
-  'invalid-registration-token',
-]);
-
-const isInvalidFcmTokenError = error => {
-  const code = String(error?.code || '').trim().toLowerCase();
-  return INVALID_FCM_ERROR_CODES.has(code);
-};
-
-const markUserAsUninstalled = async (userId, error) => {
-  const targetUserId = String(userId || '').trim();
-  if (!targetUserId) {
-    return;
-  }
-
-  try {
-    await User.updateOne(
-      { firebaseUid: targetUserId },
-      {
-        $set: {
-          appInstallState: 'uninstalled',
-          fcmToken: null,
-          fcmTokenStatus: 'error',
-          fcmTokenLastError: String(error?.code || error?.message || 'invalid_fcm_token').slice(0, 300),
-        },
-      },
-    );
-  } catch (updateError) {
-    console.error('[LEDGER][FCM_STATE] Failed to mark user as uninstalled:', updateError.message);
-  }
-};
 
 // POST /api/ledger/sync
 router.post('/sync', verifyToken, async (req, res) => {

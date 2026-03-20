@@ -4,6 +4,10 @@ const admin = require('../config/firebase');
 const User = require('../models/User');
 const MessageDelivery = require('../models/MessageDelivery');
 const { verifyToken } = require('../middleware/authMiddleware');
+const {
+  isInvalidFcmTokenError,
+  markUserAsUninstalled,
+} = require('../services/fcmTokenState');
 
 const STATUS_ORDER = {
   accepted: 1,
@@ -19,13 +23,6 @@ const DELIVERED_TTL_MINUTES = 2;
 const FEATURE_NOTIF_PAYLOAD_V3_ENABLED =
   String(process.env.NOTIF_PAYLOAD_V3_ENABLED || 'true').toLowerCase() !==
   'false';
-const INVALID_FCM_ERROR_CODES = new Set([
-  'messaging/invalid-registration-token',
-  'messaging/registration-token-not-registered',
-  'registration-token-not-registered',
-  'invalid-registration-token',
-]);
-
 const nextExpiryDate = () => {
   const now = new Date();
   now.setDate(now.getDate() + DELIVERY_TTL_DAYS);
@@ -82,34 +79,6 @@ const resolveUserByReceiverId = async receiverId => {
   }
 
   return receiver;
-};
-
-const isInvalidFcmTokenError = error => {
-  const code = String(error?.code || '').trim().toLowerCase();
-  return INVALID_FCM_ERROR_CODES.has(code);
-};
-
-const markUserAsUninstalled = async (userId, error) => {
-  const targetUserId = String(userId || '').trim();
-  if (!targetUserId) {
-    return;
-  }
-
-  try {
-    await User.updateOne(
-      { firebaseUid: targetUserId },
-      {
-        $set: {
-          appInstallState: 'uninstalled',
-          fcmToken: null,
-          fcmTokenStatus: 'error',
-          fcmTokenLastError: String(error?.code || error?.message || 'invalid_fcm_token').slice(0, 300),
-        },
-      },
-    );
-  } catch (updateError) {
-    console.error('[FCM_STATE] Failed to mark user as uninstalled:', updateError.message);
-  }
 };
 
 const saveDeliveryState = async params => {

@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const PhoneLink = require('../models/PhoneLink');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { applyInstalledTokenState } = require('../services/fcmTokenState');
 
 const normalizePhoneForLookup = value => {
   if (!value) return '';
@@ -228,14 +229,13 @@ router.post('/update-fcm-token', verifyToken, async (req, res) => {
       });
     }
 
-    user.fcmToken = nextToken;
-    user.appInstallState = 'installed';
-    user.fcmTokenUpdatedAt = new Date();
-    user.fcmTokenStatus = 'ok';
-    user.fcmTokenLastError = null;
-    if (platform) user.fcmTokenPlatform = String(platform).slice(0, 30);
-    if (deviceId) user.fcmTokenDeviceId = String(deviceId).slice(0, 120);
-    if (appVersion) user.fcmTokenAppVersion = String(appVersion).slice(0, 40);
+    applyInstalledTokenState(user, {
+      token: nextToken,
+      platform,
+      deviceId,
+      appVersion,
+      seenAt: new Date(),
+    });
     user.lastOnline = new Date();
     user.isOnline = true;
     await user.save();
@@ -254,7 +254,7 @@ router.get('/token-health', verifyToken, async (req, res) => {
   try {
     const userId = req.user?.uid;
     const user = await User.findOne({ firebaseUid: userId }).select(
-      'fcmToken fcmTokenUpdatedAt fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenAppVersion',
+      'fcmToken fcmTokenUpdatedAt lastTokenSeenAt lastAuditAt lastAuditResult fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenAppVersion',
     );
 
     if (!user) {
@@ -270,6 +270,9 @@ router.get('/token-health', verifyToken, async (req, res) => {
         hasToken: !!token,
         tokenSuffix,
         updatedAt: user.fcmTokenUpdatedAt || null,
+        lastTokenSeenAt: user.lastTokenSeenAt || null,
+        lastAuditAt: user.lastAuditAt || null,
+        lastAuditResult: user.lastAuditResult || null,
         status: user.fcmTokenStatus || 'unknown',
         lastError: user.fcmTokenLastError || null,
         platform: user.fcmTokenPlatform || null,

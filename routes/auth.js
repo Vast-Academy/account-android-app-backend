@@ -6,6 +6,7 @@ const PhoneLink = require('../models/PhoneLink');
 const PhoneClaim = require('../models/PhoneClaim');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { applyInstalledTokenState } = require('../services/fcmTokenState');
 
 const validateUsername = username => /^[a-zA-Z0-9._-]+$/.test(String(username || ''));
 
@@ -448,11 +449,10 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
     if (fcmToken) {
-      user.fcmToken = fcmToken;
-      user.appInstallState = 'installed';
-      user.fcmTokenUpdatedAt = new Date();
-      user.fcmTokenStatus = 'ok';
-      user.fcmTokenLastError = null;
+      applyInstalledTokenState(user, {
+        token: fcmToken,
+        seenAt: new Date(),
+      });
     }
     if (bio !== undefined) user.bio = bio;
     if (isOnline !== undefined) user.isOnline = isOnline;

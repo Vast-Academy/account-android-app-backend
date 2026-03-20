@@ -66,6 +66,18 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  lastTokenSeenAt: {
+    type: Date,
+    default: null
+  },
+  lastAuditAt: {
+    type: Date,
+    default: null
+  },
+  lastAuditResult: {
+    type: String,
+    default: null
+  },
   fcmTokenStatus: {
     type: String,
     enum: ['unknown', 'ok', 'error'],
