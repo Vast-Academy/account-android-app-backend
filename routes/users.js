@@ -254,7 +254,7 @@ router.get('/token-health', verifyToken, async (req, res) => {
   try {
     const userId = req.user?.uid;
     const user = await User.findOne({ firebaseUid: userId }).select(
-      'fcmToken fcmTokenUpdatedAt lastTokenSeenAt lastAuditAt lastAuditResult fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenAppVersion',
+      'firebaseUid fcmToken fcmTokenUpdatedAt lastTokenSeenAt lastAuditAt lastAuditResult appInstallState fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenDeviceId fcmTokenAppVersion',
     );
 
     if (!user) {
@@ -267,15 +267,19 @@ router.get('/token-health', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       health: {
+        userId: user.firebaseUid || null,
         hasToken: !!token,
         tokenSuffix,
+        tokenLength: token ? token.length : 0,
         updatedAt: user.fcmTokenUpdatedAt || null,
         lastTokenSeenAt: user.lastTokenSeenAt || null,
         lastAuditAt: user.lastAuditAt || null,
         lastAuditResult: user.lastAuditResult || null,
+        appInstallState: user.appInstallState || 'installed',
         status: user.fcmTokenStatus || 'unknown',
         lastError: user.fcmTokenLastError || null,
         platform: user.fcmTokenPlatform || null,
+        deviceId: user.fcmTokenDeviceId || null,
         appVersion: user.fcmTokenAppVersion || null,
       },
     });
