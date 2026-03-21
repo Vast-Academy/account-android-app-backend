@@ -289,10 +289,6 @@ router.post('/send', verifyToken, async (req, res) => {
       const pushPayload = {
         token: receiver.fcmToken,
         data: pushData,
-        notification: {
-          title: senderName,
-          body: trimmedMessageText.slice(0, 100),
-        },
         android: {
           priority: 'high',
         },
