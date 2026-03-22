@@ -4,6 +4,7 @@ const {
   isInvalidFcmTokenError,
   markTokenAuditResult,
   markUserAsUninstalled,
+  releaseExpiredPhoneOwnerships,
 } = require('./fcmTokenState');
 
 const AUDIT_STALE_AFTER_HOURS = Math.max(
@@ -109,9 +110,12 @@ const runFcmTokenAudit = async (options = {}) => {
     selected: candidates.length,
     valid: 0,
     uninstalled: 0,
+    released: 0,
     sendErrors: 0,
     skipped: 0,
   };
+
+  summary.released = await releaseExpiredPhoneOwnerships({ now: auditedAt });
 
   for (const candidate of candidates) {
     const userId = String(candidate?.firebaseUid || '').trim();

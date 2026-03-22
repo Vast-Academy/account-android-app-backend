@@ -3,7 +3,11 @@ const router = express.Router();
 const User = require('../models/User');
 const PhoneLink = require('../models/PhoneLink');
 const { verifyToken } = require('../middleware/authMiddleware');
-const { applyInstalledTokenState } = require('../services/fcmTokenState');
+const {
+  applyInstalledTokenState,
+  releaseExpiredPhoneOwnerships,
+  PHONE_RECLAIM_GRACE_MINUTES,
+} = require('../services/fcmTokenState');
 
 const normalizePhoneForLookup = value => {
   if (!value) return '';
@@ -72,6 +76,48 @@ const syncPhoneLinks = async (userId, nextFullPhone, prevNormalized = '') => {
   return nextNormalized;
 };
 
+const isPhoneTaken = async (normalizedPhone, excludeFirebaseUid = '') => {
+  if (!normalizedPhone) {
+    return false;
+  }
+
+  await releaseExpiredPhoneOwnerships({ normalizedPhones: [normalizedPhone] });
+
+  const active = await PhoneLink.findOne({
+    phoneNormalized: normalizedPhone,
+    isCurrent: true,
+    ...(excludeFirebaseUid ? { userId: { $ne: String(excludeFirebaseUid) } } : {}),
+  }).lean();
+
+  if (active) {
+    const activeOwner = await User.findOne({
+      firebaseUid: String(active.userId || ''),
+    })
+      .select('firebaseUid')
+      .lean();
+
+    if (activeOwner) {
+      return true;
+    }
+
+    await PhoneLink.updateMany(
+      {
+        phoneNormalized: normalizedPhone,
+        isCurrent: true,
+        userId: String(active.userId || ''),
+      },
+      { $set: { isCurrent: false, validTo: new Date() } },
+    );
+  }
+
+  const fallback = await User.findOne({
+    mobileNormalized: normalizedPhone,
+    ...(excludeFirebaseUid ? { firebaseUid: { $ne: String(excludeFirebaseUid) } } : {}),
+  }).lean();
+
+  return Boolean(fallback);
+};
+
 router.post('/sync-profile', verifyToken, async (req, res) => {
   try {
     const firebaseUid = req.user.uid;
@@ -111,10 +157,20 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
     const nextFullPhone = mobile ? normalizeFullPhone(mobile) : String(user?.mobile || '');
     const nextNormalized = normalizePhoneForLookup(nextFullPhone);
 
+    if (nextNormalized && nextNormalized !== prevNormalized) {
+      const taken = await isPhoneTaken(nextNormalized, firebaseUid);
+      if (taken) {
+        return res.status(409).json({ success: false, message: 'Phone number already taken' });
+      }
+    }
+
     const update = {
       displayName,
       mobile: nextFullPhone || undefined,
       mobileNormalized: nextNormalized || undefined,
+      phoneOwnershipState: nextNormalized ? 'active' : 'released',
+      phoneReclaimMarkedAt: null,
+      phoneReleaseAfter: null,
       email,
       photoURL,
       fcmToken,
@@ -254,7 +310,7 @@ router.get('/token-health', verifyToken, async (req, res) => {
   try {
     const userId = req.user?.uid;
     const user = await User.findOne({ firebaseUid: userId }).select(
-      'firebaseUid fcmToken fcmTokenUpdatedAt lastTokenSeenAt lastAuditAt lastAuditResult appInstallState fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenDeviceId fcmTokenAppVersion',
+      'firebaseUid fcmToken fcmTokenUpdatedAt lastTokenSeenAt lastAuditAt lastAuditResult appInstallState fcmTokenStatus fcmTokenLastError fcmTokenPlatform fcmTokenDeviceId fcmTokenAppVersion phoneOwnershipState phoneReclaimMarkedAt phoneReleaseAfter mobile mobileNormalized',
     );
 
     if (!user) {
@@ -276,6 +332,10 @@ router.get('/token-health', verifyToken, async (req, res) => {
         lastAuditAt: user.lastAuditAt || null,
         lastAuditResult: user.lastAuditResult || null,
         appInstallState: user.appInstallState || 'installed',
+        phoneOwnershipState: user.phoneOwnershipState || (user.mobileNormalized || user.mobile ? 'active' : 'released'),
+        phoneReclaimMarkedAt: user.phoneReclaimMarkedAt || null,
+        phoneReleaseAfter: user.phoneReleaseAfter || null,
+        reclaimGraceMinutes: PHONE_RECLAIM_GRACE_MINUTES,
         status: user.fcmTokenStatus || 'unknown',
         lastError: user.fcmTokenLastError || null,
         platform: user.fcmTokenPlatform || null,

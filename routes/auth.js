@@ -6,7 +6,11 @@ const PhoneLink = require('../models/PhoneLink');
 const PhoneClaim = require('../models/PhoneClaim');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
-const { applyInstalledTokenState } = require('../services/fcmTokenState');
+const {
+  applyInstalledTokenState,
+  releaseExpiredPhoneOwnerships,
+  getEffectivePhoneOwnershipState,
+} = require('../services/fcmTokenState');
 
 const validateUsername = username => /^[a-zA-Z0-9._-]+$/.test(String(username || ''));
 
@@ -84,6 +88,8 @@ const syncPhoneLinks = async (userId, nextFullPhone, prevNormalized = '') => {
 
 const isPhoneTaken = async (normalizedPhone, excludeFirebaseUid = '') => {
   if (!normalizedPhone) return false;
+
+  await releaseExpiredPhoneOwnerships({ normalizedPhones: [normalizedPhone] });
 
   const active = await PhoneLink.findOne({
     phoneNormalized: normalizedPhone,
@@ -254,7 +260,7 @@ router.get('/user', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/users-by-phones', verifyToken, async (req, res) => {
+  router.post('/users-by-phones', verifyToken, async (req, res) => {
   try {
     const phones = Array.isArray(req.body?.phones) ? req.body.phones : [];
     if (!phones.length) {
@@ -265,6 +271,8 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
     if (!normalizedInput.length) {
       return res.status(200).json({ success: true, users: [] });
     }
+
+    await releaseExpiredPhoneOwnerships({ normalizedPhones: normalizedInput });
 
     const activeLinks = await PhoneLink.find({
       phoneNormalized: { $in: normalizedInput },
@@ -295,7 +303,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
     ]);
 
     const users = await User.find({ firebaseUid: { $in: Array.from(userIds).filter(Boolean) } })
-      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState')
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState phoneOwnershipState')
       .lean();
     const userById = new Map(users.map(item => [String(item.firebaseUid), item]));
     const fallbackUsers = await User.find({
@@ -304,7 +312,7 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
         { mobile: { $in: phones.map(normalizeFullPhone).filter(Boolean) } },
       ],
     })
-      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState')
+      .select('firebaseUid username displayName photoURL mobile mobileNormalized appInstallState phoneOwnershipState')
       .lean();
     const fallbackByPhone = new Map();
     fallbackUsers.forEach(item => {
@@ -342,7 +350,16 @@ router.post('/users-by-phones', verifyToken, async (req, res) => {
       const historical = latestHistoricalByPhone.get(phone);
       if (historical) {
         const owner = userById.get(String(historical.userId));
-        if (owner) {
+        const ownerPhoneState = getEffectivePhoneOwnershipState(owner);
+        const currentNormalizedPhone = String(
+          owner?.mobileNormalized || normalizePhoneForLookup(owner?.mobile),
+        ).trim();
+        if (
+          owner &&
+          ownerPhoneState === 'active' &&
+          currentNormalizedPhone &&
+          currentNormalizedPhone !== phone
+        ) {
           result.push({
             id: owner._id,
             userId: owner.firebaseUid,
@@ -462,6 +479,9 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     if (mobile) {
       user.mobile = nextFullPhone;
       user.mobileNormalized = nextNormalized || null;
+      user.phoneOwnershipState = nextNormalized ? 'active' : 'released';
+      user.phoneReclaimMarkedAt = null;
+      user.phoneReleaseAfter = null;
     }
     if (dob) user.dob = new Date(dob);
     if (gender) user.gender = gender;
@@ -686,6 +706,9 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
     if (String(ownerUser.mobileNormalized || '') === phoneNormalized) {
       ownerUser.mobile = null;
       ownerUser.mobileNormalized = null;
+      ownerUser.phoneOwnershipState = 'released';
+      ownerUser.phoneReclaimMarkedAt = null;
+      ownerUser.phoneReleaseAfter = null;
       ownerUser.setupComplete = false;
       ownerUser.searchableTerms = generateSearchableTerms(ownerUser);
       await ownerUser.save();
@@ -693,6 +716,9 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
 
     requesterUser.mobile = activeOwnerLink.fullPhone || phoneNormalized;
     requesterUser.mobileNormalized = phoneNormalized;
+    requesterUser.phoneOwnershipState = 'active';
+    requesterUser.phoneReclaimMarkedAt = null;
+    requesterUser.phoneReleaseAfter = null;
     requesterUser.searchableTerms = generateSearchableTerms(requesterUser);
     await requesterUser.save();
 

@@ -62,6 +62,19 @@ const userSchema = new mongoose.Schema({
     enum: ['installed', 'uninstalled'],
     default: 'installed'
   },
+  phoneOwnershipState: {
+    type: String,
+    enum: ['active', 'reclaimable', 'released'],
+    default: 'released'
+  },
+  phoneReclaimMarkedAt: {
+    type: Date,
+    default: null
+  },
+  phoneReleaseAfter: {
+    type: Date,
+    default: null
+  },
   fcmTokenUpdatedAt: {
     type: Date,
     default: null
