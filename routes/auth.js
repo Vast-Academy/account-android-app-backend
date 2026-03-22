@@ -10,6 +10,8 @@ const {
   applyInstalledTokenState,
   releaseExpiredPhoneOwnerships,
   getEffectivePhoneOwnershipState,
+  isInvalidFcmTokenError,
+  markUserAsUninstalled,
 } = require('../services/fcmTokenState');
 
 const validateUsername = username => /^[a-zA-Z0-9._-]+$/.test(String(username || ''));
@@ -44,6 +46,18 @@ const generateSearchableTerms = user => {
     terms.push(String(user.mobile));
   }
   return [...new Set(terms.filter(Boolean))];
+};
+
+const createPushEventId = ({
+  prefix = 'phone_claim',
+  claimId = '',
+  requesterId = '',
+  targetOwnerId = '',
+}) => {
+  const cid = String(claimId || '').trim() || 'na';
+  const rid = String(requesterId || '').trim() || 'na';
+  const tid = String(targetOwnerId || '').trim() || 'na';
+  return `${prefix}_${cid}_${rid}_${tid}_${Date.now()}`;
 };
 
 const syncPhoneLinks = async (userId, nextFullPhone, prevNormalized = '') => {
@@ -573,6 +587,66 @@ router.post('/phone-claims/request', verifyToken, async (req, res) => {
       status: 'pending',
       rejectCount: rejectedCount,
     });
+
+    const [requesterUser, targetOwnerUser] = await Promise.all([
+      User.findOne({ firebaseUid: requesterId })
+        .select('firebaseUid displayName username email')
+        .lean(),
+      User.findOne({ firebaseUid: String(activeOwner.userId) })
+        .select('firebaseUid fcmToken appInstallState')
+        .lean(),
+    ]);
+
+    const targetOwnerUid = String(activeOwner.userId || '').trim();
+    const phoneLastFour = normalizedPhone.slice(-4);
+    const pushEventId = createPushEventId({
+      prefix: 'phone_claim',
+      claimId: claim?._id,
+      requesterId,
+      targetOwnerId: targetOwnerUid,
+    });
+
+    if (
+      targetOwnerUser?.fcmToken &&
+      String(targetOwnerUser?.appInstallState || 'installed').trim().toLowerCase() !==
+        'uninstalled'
+    ) {
+      try {
+        await admin.messaging().send({
+          token: String(targetOwnerUser.fcmToken || '').trim(),
+          data: {
+            type: 'phone_claim_request',
+            claimId: String(claim?._id || '').trim(),
+            requesterId: String(requesterId || '').trim(),
+            requesterName: String(
+              requesterUser?.displayName ||
+                requesterUser?.username ||
+                requesterUser?.email ||
+                'User',
+            ).trim(),
+            phoneNormalized: normalizedPhone,
+            phoneLastFour,
+            notifVersion: 'v1',
+            eventId: pushEventId,
+          },
+          android: {
+            priority: 'high',
+          },
+        });
+      } catch (fcmError) {
+        if (isInvalidFcmTokenError(fcmError)) {
+          await markUserAsUninstalled(targetOwnerUid, fcmError, {
+            auditResult: 'phone_claim_invalid_token',
+          });
+        } else {
+          console.error('[PHONE_CLAIM] Failed to send phone-claim push:', {
+            targetOwnerId: targetOwnerUid,
+            claimId: String(claim?._id || '').trim(),
+            message: fcmError?.message || String(fcmError),
+          });
+        }
+      }
+    }
 
     console.log('[PHONE_CLAIM] Notify target owner', {
       targetOwnerId: String(activeOwner.userId),
