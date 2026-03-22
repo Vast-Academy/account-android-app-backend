@@ -60,6 +60,54 @@ const createPushEventId = ({
   return `${prefix}_${cid}_${rid}_${tid}_${Date.now()}`;
 };
 
+const sendPhoneClaimDataPushBestEffort = async (
+  targetUser,
+  payload,
+  {auditResult = 'phone_claim_invalid_token'} = {},
+) => {
+  const fcmToken = String(targetUser?.fcmToken || '').trim();
+  const targetFirebaseUid = String(targetUser?.firebaseUid || '').trim();
+  const appInstallState = String(targetUser?.appInstallState || 'installed')
+    .trim()
+    .toLowerCase();
+
+  if (!fcmToken || !targetFirebaseUid || appInstallState === 'uninstalled') {
+    return false;
+  }
+
+  try {
+    await admin.messaging().send({
+      token: fcmToken,
+      data: Object.keys(payload || {}).reduce((acc, key) => {
+        const value = payload?.[key];
+        if (value === undefined || value === null) {
+          return acc;
+        }
+        acc[key] = String(value);
+        return acc;
+      }, {}),
+      android: {
+        priority: 'high',
+      },
+    });
+    return true;
+  } catch (fcmError) {
+    if (isInvalidFcmTokenError(fcmError)) {
+      await markUserAsUninstalled(targetFirebaseUid, fcmError, {
+        auditResult,
+      });
+    } else {
+      console.error('[PHONE_CLAIM] Failed to send data push:', {
+        targetUserId: targetFirebaseUid,
+        message: fcmError?.message || String(fcmError),
+        payloadType: String(payload?.type || '').trim() || null,
+        claimId: String(payload?.claimId || '').trim() || null,
+      });
+    }
+    return false;
+  }
+};
+
 const syncPhoneLinks = async (userId, nextFullPhone, prevNormalized = '') => {
   const nextNormalized = normalizePhoneForLookup(nextFullPhone);
   const now = new Date();
@@ -606,47 +654,27 @@ router.post('/phone-claims/request', verifyToken, async (req, res) => {
       targetOwnerId: targetOwnerUid,
     });
 
-    if (
-      targetOwnerUser?.fcmToken &&
-      String(targetOwnerUser?.appInstallState || 'installed').trim().toLowerCase() !==
-        'uninstalled'
-    ) {
-      try {
-        await admin.messaging().send({
-          token: String(targetOwnerUser.fcmToken || '').trim(),
-          data: {
-            type: 'phone_claim_request',
-            claimId: String(claim?._id || '').trim(),
-            requesterId: String(requesterId || '').trim(),
-            requesterName: String(
-              requesterUser?.displayName ||
-                requesterUser?.username ||
-                requesterUser?.email ||
-                'User',
-            ).trim(),
-            phoneNormalized: normalizedPhone,
-            phoneLastFour,
-            notifVersion: 'v1',
-            eventId: pushEventId,
-          },
-          android: {
-            priority: 'high',
-          },
-        });
-      } catch (fcmError) {
-        if (isInvalidFcmTokenError(fcmError)) {
-          await markUserAsUninstalled(targetOwnerUid, fcmError, {
-            auditResult: 'phone_claim_invalid_token',
-          });
-        } else {
-          console.error('[PHONE_CLAIM] Failed to send phone-claim push:', {
-            targetOwnerId: targetOwnerUid,
-            claimId: String(claim?._id || '').trim(),
-            message: fcmError?.message || String(fcmError),
-          });
-        }
-      }
-    }
+    await sendPhoneClaimDataPushBestEffort(
+      targetOwnerUser,
+      {
+        type: 'phone_claim_request',
+        claimId: String(claim?._id || '').trim(),
+        requesterId: String(requesterId || '').trim(),
+        requesterName: String(
+          requesterUser?.displayName ||
+            requesterUser?.username ||
+            requesterUser?.email ||
+            'User',
+        ).trim(),
+        phoneNormalized: normalizedPhone,
+        phoneLastFour,
+        notifVersion: 'v1',
+        eventId: pushEventId,
+      },
+      {
+        auditResult: 'phone_claim_invalid_token',
+      },
+    );
 
     console.log('[PHONE_CLAIM] Notify target owner', {
       targetOwnerId: String(activeOwner.userId),
@@ -725,6 +753,29 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
       claim.status = 'rejected';
       claim.rejectCount = Number(claim.rejectCount || 0) + 1;
       await claim.save();
+      const requesterUser = await User.findOne({ firebaseUid: String(claim.requesterId || '') })
+        .select('firebaseUid fcmToken appInstallState')
+        .lean();
+      await sendPhoneClaimDataPushBestEffort(
+        requesterUser,
+        {
+          type: 'phone_claim_result',
+          status: 'rejected',
+          claimId: String(claim._id || '').trim(),
+          phoneNormalized: String(claim.phoneNormalized || '').trim(),
+          phoneLastFour: String(claim.phoneNormalized || '').trim().slice(-4),
+          notifVersion: 'v1',
+          eventId: createPushEventId({
+            prefix: 'phone_claim_result',
+            claimId: claim._id,
+            requesterId: claim.requesterId,
+            targetOwnerId,
+          }),
+        },
+        {
+          auditResult: 'phone_claim_result_invalid_token',
+        },
+      );
       return res.status(200).json({ success: true, claim, message: 'Request rejected' });
     }
 
@@ -732,6 +783,29 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
       claim.status = 'blocked';
       claim.blockedByTarget = true;
       await claim.save();
+      const requesterUser = await User.findOne({ firebaseUid: String(claim.requesterId || '') })
+        .select('firebaseUid fcmToken appInstallState')
+        .lean();
+      await sendPhoneClaimDataPushBestEffort(
+        requesterUser,
+        {
+          type: 'phone_claim_result',
+          status: 'blocked',
+          claimId: String(claim._id || '').trim(),
+          phoneNormalized: String(claim.phoneNormalized || '').trim(),
+          phoneLastFour: String(claim.phoneNormalized || '').trim().slice(-4),
+          notifVersion: 'v1',
+          eventId: createPushEventId({
+            prefix: 'phone_claim_result',
+            claimId: claim._id,
+            requesterId: claim.requesterId,
+            targetOwnerId,
+          }),
+        },
+        {
+          auditResult: 'phone_claim_result_invalid_token',
+        },
+      );
       return res.status(200).json({ success: true, claim, message: 'Requester blocked' });
     }
 
@@ -798,6 +872,27 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
 
     claim.status = 'approved';
     await claim.save();
+
+    await sendPhoneClaimDataPushBestEffort(
+      requesterUser,
+      {
+        type: 'phone_claim_result',
+        status: 'approved',
+        claimId: String(claim._id || '').trim(),
+        phoneNormalized,
+        phoneLastFour: phoneNormalized.slice(-4),
+        notifVersion: 'v1',
+        eventId: createPushEventId({
+          prefix: 'phone_claim_result',
+          claimId: claim._id,
+          requesterId,
+          targetOwnerId,
+        }),
+      },
+      {
+        auditResult: 'phone_claim_result_invalid_token',
+      },
+    );
 
     console.log('[PHONE_CLAIM] Approved transfer', {
       phoneNormalized,
