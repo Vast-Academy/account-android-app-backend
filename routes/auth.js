@@ -92,7 +92,28 @@ const isPhoneTaken = async (normalizedPhone, excludeFirebaseUid = '') => {
   }).lean();
 
   if (active) {
-    return true;
+    const activeOwner = await User.findOne({
+      firebaseUid: String(active.userId || ''),
+    })
+      .select('firebaseUid')
+      .lean();
+
+    if (activeOwner) {
+      return true;
+    }
+
+    await PhoneLink.updateMany(
+      {
+        phoneNormalized: normalizedPhone,
+        isCurrent: true,
+        userId: String(active.userId || ''),
+      },
+      { $set: { isCurrent: false, validTo: new Date() } },
+    );
+    console.warn('[PHONE_OWNERSHIP] Released stale phone link for missing owner', {
+      phoneNormalized: normalizedPhone,
+      staleUserId: String(active.userId || ''),
+    });
   }
 
   const fallback = await User.findOne({
@@ -558,7 +579,31 @@ router.get('/phone-claims/inbox', verifyToken, async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    return res.status(200).json({ success: true, claims: rows });
+    const requesterIds = [...new Set(rows.map(item => String(item.requesterId || '')).filter(Boolean))];
+    const requesters = await User.find({ firebaseUid: { $in: requesterIds } })
+      .select('firebaseUid displayName username email mobile')
+      .lean();
+    const requesterById = new Map(
+      requesters.map(item => [String(item.firebaseUid), item]),
+    );
+
+    const claims = rows.map(item => {
+      const requester = requesterById.get(String(item.requesterId || ''));
+      return {
+        ...item,
+        requester: requester
+          ? {
+              firebaseUid: requester.firebaseUid,
+              displayName: requester.displayName || '',
+              username: requester.username || '',
+              email: requester.email || '',
+              mobile: requester.mobile || '',
+            }
+          : null,
+      };
+    });
+
+    return res.status(200).json({ success: true, claims });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to load claim inbox', error: error.message });
   }
@@ -625,16 +670,23 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Requester or owner account not found' });
     }
 
+    const requesterPrevNormalized = String(requesterUser.mobileNormalized || '');
+
     await PhoneLink.updateMany(
       { phoneNormalized, isCurrent: true },
       { $set: { isCurrent: false, validTo: new Date() } },
     );
 
-    await syncPhoneLinks(requesterId, activeOwnerLink.fullPhone || phoneNormalized, '');
+    await syncPhoneLinks(
+      requesterId,
+      activeOwnerLink.fullPhone || phoneNormalized,
+      requesterPrevNormalized,
+    );
 
     if (String(ownerUser.mobileNormalized || '') === phoneNormalized) {
       ownerUser.mobile = null;
       ownerUser.mobileNormalized = null;
+      ownerUser.setupComplete = false;
       ownerUser.searchableTerms = generateSearchableTerms(ownerUser);
       await ownerUser.save();
     }
