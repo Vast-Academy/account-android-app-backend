@@ -13,6 +13,10 @@ const {
   isInvalidFcmTokenError,
   markUserAsUninstalled,
 } = require('../services/fcmTokenState');
+const {
+  buildBootstrapPayload,
+  buildCanonicalUser,
+} = require('../services/canonicalUser');
 
 const validateUsername = username => /^[a-zA-Z0-9._-]+$/.test(String(username || ''));
 
@@ -223,7 +227,11 @@ router.post('/google-signin', async (req, res) => {
     return res.status(200).json({
       success: true,
       setupComplete: user.setupComplete,
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Authentication failed', error: error.message });
@@ -278,7 +286,15 @@ router.post('/complete-setup', async (req, res) => {
     user.searchableTerms = generateSearchableTerms(user);
     await user.save();
 
-    return res.status(200).json({ success: true, message: 'Setup completed successfully', user });
+    return res.status(200).json({
+      success: true,
+      message: 'Setup completed successfully',
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to complete setup', error: error.message });
   }
@@ -304,7 +320,15 @@ router.post('/login', async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
 
-    return res.status(200).json({ success: true, message: 'Login successful', user });
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Login failed', error: error.message });
   }
@@ -316,7 +340,7 @@ router.get('/user', verifyToken, async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    return res.status(200).json({ success: true, user });
+    return res.status(200).json(buildBootstrapPayload(user));
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch user details', error: error.message });
   }
@@ -392,15 +416,12 @@ router.get('/user', verifyToken, async (req, res) => {
         const owner = userById.get(String(active.userId));
         if (owner) {
           result.push({
-            id: owner._id,
-            userId: owner.firebaseUid,
-            firebaseUid: owner.firebaseUid,
-            username: owner.username || '',
-            displayName: owner.displayName || 'User',
-            photoURL: owner.photoURL || null,
-            mobile: owner.mobile || '',
+            ...buildCanonicalUser(owner, {
+              includeMongoId: true,
+              includeEmail: false,
+              includePrivatePhone: true,
+            }),
             normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
-            appInstallState: owner.appInstallState || 'installed',
             status: 'app_user',
             queriedPhone: phone,
             currentPhone: owner.mobile || '',
@@ -423,15 +444,12 @@ router.get('/user', verifyToken, async (req, res) => {
           currentNormalizedPhone !== phone
         ) {
           result.push({
-            id: owner._id,
-            userId: owner.firebaseUid,
-            firebaseUid: owner.firebaseUid,
-            username: owner.username || '',
-            displayName: owner.displayName || 'User',
-            photoURL: owner.photoURL || null,
-            mobile: owner.mobile || '',
+            ...buildCanonicalUser(owner, {
+              includeMongoId: true,
+              includeEmail: false,
+              includePrivatePhone: true,
+            }),
             normalizedMobile: owner.mobileNormalized || normalizePhoneForLookup(owner.mobile),
-            appInstallState: owner.appInstallState || 'installed',
             status: 'number_changed',
             queriedPhone: phone,
             currentPhone: owner.mobile || '',
@@ -443,15 +461,12 @@ router.get('/user', verifyToken, async (req, res) => {
       const fallback = fallbackByPhone.get(phone);
       if (fallback) {
         result.push({
-          id: fallback._id,
-          userId: fallback.firebaseUid,
-          firebaseUid: fallback.firebaseUid,
-          username: fallback.username || '',
-          displayName: fallback.displayName || 'User',
-          photoURL: fallback.photoURL || null,
-          mobile: fallback.mobile || '',
+          ...buildCanonicalUser(fallback, {
+            includeMongoId: true,
+            includeEmail: false,
+            includePrivatePhone: true,
+          }),
           normalizedMobile: fallback.mobileNormalized || normalizePhoneForLookup(fallback.mobile),
-          appInstallState: fallback.appInstallState || 'installed',
           status: 'app_user',
           queriedPhone: phone,
           currentPhone: fallback.mobile || '',
@@ -574,7 +589,11 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update profile', error: error.message });

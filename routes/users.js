@@ -8,6 +8,10 @@ const {
   releaseExpiredPhoneOwnerships,
   PHONE_RECLAIM_GRACE_MINUTES,
 } = require('../services/fcmTokenState');
+const {
+  buildBootstrapPayload,
+  buildCanonicalUser,
+} = require('../services/canonicalUser');
 
 const normalizePhoneForLookup = value => {
   if (!value) return '';
@@ -201,10 +205,26 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile synced successfully',
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to sync profile', error: error.message });
+  }
+});
+
+router.get('/bootstrap', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findOne({ firebaseUid: req.user.uid });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    return res.status(200).json(buildBootstrapPayload(user));
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to fetch bootstrap user', error: error.message });
   }
 });
 
@@ -227,18 +247,11 @@ router.post('/search', verifyToken, async (req, res) => {
       .lean();
 
     const sanitizedUsers = users.map(user => {
-      const result = {
-        id: user._id,
-        firebaseUid: user.firebaseUid,
-        username: user.username,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-        email: user.email,
-        appInstallState: user.appInstallState || 'installed',
-      };
-      if (user.privacy?.phoneNumberVisible !== false) {
-        result.mobile = user.mobile;
-      }
+      const result = buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: user.privacy?.phoneNumberVisible !== false,
+      });
       return result;
     });
 
