@@ -7,6 +7,7 @@ const {
   applyInstalledTokenState,
   releaseExpiredPhoneOwnerships,
   PHONE_RECLAIM_GRACE_MINUTES,
+  detachTokenFromOtherUsers,
 } = require('../services/fcmTokenState');
 
 const normalizePhoneForLookup = value => {
@@ -173,7 +174,6 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
       phoneReleaseAfter: null,
       email,
       photoURL,
-      fcmToken,
       privacy: privacy || {
         phoneNumberVisible: true,
         lastSeenVisible: true,
@@ -181,6 +181,26 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
       },
       lastOnline: new Date(),
     };
+    const profileToken = String(fcmToken || '').trim();
+    if (profileToken) {
+      const detached = await detachTokenFromOtherUsers(profileToken, firebaseUid, {
+        reason: 'token_reassigned_sync_profile',
+      });
+      if (detached.modifiedCount > 0) {
+        console.log('[TOKEN_OWNERSHIP][REASSIGNED_SYNC_PROFILE]', {
+          ownerUid: firebaseUid,
+          detachedCount: detached.modifiedCount,
+          tokenSuffix: profileToken.slice(-8),
+        });
+      }
+      update.fcmToken = profileToken;
+      update.appInstallState = 'installed';
+      update.fcmTokenStatus = 'ok';
+      update.fcmTokenLastError = null;
+      update.lastTokenSeenAt = new Date();
+      update.fcmTokenUpdatedAt = new Date();
+      update.lastAuditResult = 'token_sync_profile';
+    }
 
     if (incomingUsername && !user?.username) {
       update.username = incomingUsername;
@@ -285,6 +305,17 @@ router.post('/update-fcm-token', verifyToken, async (req, res) => {
       });
     }
 
+    const detached = await detachTokenFromOtherUsers(nextToken, userId, {
+      reason: 'token_reassigned',
+    });
+    if (detached.modifiedCount > 0) {
+      console.log('[TOKEN_OWNERSHIP][REASSIGNED]', {
+        ownerUid: userId,
+        detachedCount: detached.modifiedCount,
+        tokenSuffix: nextToken.slice(-8),
+      });
+    }
+
     applyInstalledTokenState(user, {
       token: nextToken,
       platform,
@@ -300,6 +331,7 @@ router.post('/update-fcm-token', verifyToken, async (req, res) => {
       success: true,
       message: 'FCM token updated successfully',
       tokenUpdatedAt: user.fcmTokenUpdatedAt,
+      detachedCount: detached.modifiedCount,
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

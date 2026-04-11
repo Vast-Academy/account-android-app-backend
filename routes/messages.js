@@ -56,29 +56,26 @@ const resolveUserByReceiverId = async receiverId => {
   if (!target) {
     return null;
   }
+  return User.findOne({firebaseUid: target})
+    .select('firebaseUid appInstallState fcmToken')
+    .lean();
+};
 
-  let receiver = await User.findOne({firebaseUid: target});
-  if (receiver) {
-    return receiver;
+const isConversationParticipantPair = ({
+  conversationId,
+  senderId,
+  receiverId,
+}) => {
+  const participants = String(conversationId || '')
+    .split('_')
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+
+  if (participants.length !== 2) {
+    return false;
   }
 
-  try {
-    receiver = await User.findOne({_id: target});
-    if (receiver) {
-      return receiver;
-    }
-  } catch {
-    // Ignore invalid object id.
-  }
-
-  const digits = target.replace(/\D/g, '');
-  if (digits) {
-    receiver = await User.findOne({
-      mobile: {$regex: `${digits}$`},
-    });
-  }
-
-  return receiver;
+  return participants.includes(senderId) && participants.includes(receiverId);
 };
 
 const saveDeliveryState = async params => {
@@ -143,6 +140,11 @@ const createPushEventId = ({
   return `${prefix}_${mid || 'na'}_${sid || 'na'}_${rid || 'na'}_${Date.now()}`;
 };
 
+const tokenSuffix = token => {
+  const value = String(token || '').trim();
+  return value ? value.slice(-8) : '';
+};
+
 // POST /api/messages/send
 router.post('/send', verifyToken, async (req, res) => {
   try {
@@ -181,6 +183,19 @@ router.post('/send', verifyToken, async (req, res) => {
       });
     }
 
+    if (
+      !isConversationParticipantPair({
+        conversationId: trimmedConversationId,
+        senderId,
+        receiverId: trimmedReceiverId,
+      })
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'conversationId participants do not match senderId/receiverId',
+      });
+    }
+
     const receiver = await resolveUserByReceiverId(trimmedReceiverId);
     if (!receiver) {
       return res.status(404).json({
@@ -189,7 +204,7 @@ router.post('/send', verifyToken, async (req, res) => {
       });
     }
 
-    const receiverUid = String(receiver.firebaseUid || receiver._id || '').trim();
+    const receiverUid = String(receiver.firebaseUid || '').trim();
     if (!receiverUid) {
       return res.status(404).json({
         success: false,
@@ -204,6 +219,14 @@ router.post('/send', verifyToken, async (req, res) => {
       conversationId: trimmedConversationId,
       upstreamLatencyMs,
     });
+    if (receiverUid !== trimmedReceiverId) {
+      console.warn('[CHAT_ROUTE][UID_MISMATCH]', {
+        messageId,
+        senderId,
+        requestReceiverId: trimmedReceiverId,
+        resolvedReceiverUid: receiverUid,
+      });
+    }
 
     // Persist acceptance before push attempt.
     await saveDeliveryState({
@@ -216,7 +239,9 @@ router.post('/send', verifyToken, async (req, res) => {
       status: 'accepted',
     });
 
-    const senderUser = await User.findOne({firebaseUid: senderId});
+    const senderUser = await User.findOne({firebaseUid: senderId})
+      .select('displayName username mobile mobileNormalized')
+      .lean();
     const senderName = senderUser?.displayName || senderUser?.username || 'New Message';
     const senderPhone = String(
       senderUser?.mobileNormalized || senderUser?.mobile || ''
@@ -257,6 +282,7 @@ router.post('/send', verifyToken, async (req, res) => {
       console.log('[CHAT_LATENCY][FCM_SKIP_NO_TOKEN]', {
         messageId,
         receiverId: receiverUid,
+        tokenSuffix: '',
         totalServerMs: Date.now() - requestStartedAt,
       });
       return res.status(200).json({
@@ -275,12 +301,18 @@ router.post('/send', verifyToken, async (req, res) => {
         conversationId: trimmedConversationId,
         senderId,
         senderName,
-        senderPhone,
-        contactRecordId: normalizedContactRecordId,
         messageText: trimmedMessageText,
-        messageType: String(messageType || 'text'),
         timestamp: String(payloadTimestamp),
       };
+      if (senderPhone) {
+        pushData.senderPhone = senderPhone;
+      }
+      if (normalizedContactRecordId) {
+        pushData.contactRecordId = normalizedContactRecordId;
+      }
+      if (String(messageType || 'text') !== 'text') {
+        pushData.messageType = String(messageType || 'text');
+      }
       if (FEATURE_NOTIF_PAYLOAD_V3_ENABLED) {
         pushData.notifVersion = 'v3';
         pushData.eventId = pushEventId;
@@ -299,6 +331,7 @@ router.post('/send', verifyToken, async (req, res) => {
       console.log('[CHAT_LATENCY][FCM_PUSHED]', {
         messageId,
         receiverId: receiverUid,
+        tokenSuffix: tokenSuffix(receiver.fcmToken),
         serverToPushMs: Date.now() - requestStartedAt,
         upstreamLatencyMs,
       });
@@ -345,6 +378,7 @@ router.post('/send', verifyToken, async (req, res) => {
       console.log('[CHAT_LATENCY][FCM_FAILED]', {
         messageId,
         receiverId: receiverUid,
+        tokenSuffix: tokenSuffix(receiver.fcmToken),
         serverToFailureMs: Date.now() - requestStartedAt,
         error: String(fcmError?.message || fcmError || ''),
       });

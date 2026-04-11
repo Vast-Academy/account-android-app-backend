@@ -170,4 +170,10 @@ userSchema.index(
   { unique: true, sparse: true, partialFilterExpression: { mobileNormalized: { $type: 'string', $ne: '' } } }
 );
 
+// Fast token ownership lookup for reassignment/detach flows.
+userSchema.index(
+  { fcmToken: 1 },
+  { sparse: true, partialFilterExpression: { fcmToken: { $type: 'string', $ne: '' } } }
+);
+
 module.exports = mongoose.model('User', userSchema);

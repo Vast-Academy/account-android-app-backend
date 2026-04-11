@@ -225,6 +225,66 @@ const markTokenAuditResult = async (userId, options = {}) => {
   }
 };
 
+const detachTokenFromOtherUsers = async (token, ownerUid, options = {}) => {
+  const normalizedToken = String(token || '').trim();
+  const normalizedOwnerUid = String(ownerUid || '').trim();
+  if (!normalizedToken || !normalizedOwnerUid) {
+    return {modifiedCount: 0};
+  }
+
+  const now = options.now instanceof Date ? options.now : new Date();
+  const reason = String(options.reason || 'token_reassigned').slice(0, 80);
+  const result = await User.updateMany(
+    {
+      fcmToken: normalizedToken,
+      firebaseUid: {$ne: normalizedOwnerUid},
+    },
+    {
+      $set: {
+        fcmToken: null,
+        appInstallState: 'uninstalled',
+        fcmTokenStatus: 'error',
+        fcmTokenLastError: reason,
+        lastAuditResult: reason,
+        lastAuditAt: now,
+        lastOnline: now,
+        isOnline: false,
+      },
+    },
+  );
+
+  return {
+    modifiedCount: Number(result?.modifiedCount || 0),
+  };
+};
+
+const detachTokenForUser = async (userId, options = {}) => {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    return {modifiedCount: 0};
+  }
+  const now = options.now instanceof Date ? options.now : new Date();
+  const reason = String(options.reason || 'logout_token_detached').slice(0, 80);
+  const result = await User.updateOne(
+    {firebaseUid: normalizedUserId},
+    {
+      $set: {
+        fcmToken: null,
+        appInstallState: 'uninstalled',
+        fcmTokenStatus: 'error',
+        fcmTokenLastError: reason,
+        lastAuditResult: reason,
+        lastAuditAt: now,
+        lastOnline: now,
+        isOnline: false,
+      },
+    },
+  );
+  return {
+    modifiedCount: Number(result?.modifiedCount || 0),
+  };
+};
+
 module.exports = {
   INVALID_FCM_ERROR_CODES,
   PHONE_RECLAIM_GRACE_MINUTES,
@@ -234,4 +294,6 @@ module.exports = {
   markUserAsUninstalled,
   releaseExpiredPhoneOwnerships,
   markTokenAuditResult,
+  detachTokenFromOtherUsers,
+  detachTokenForUser,
 };

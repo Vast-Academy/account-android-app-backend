@@ -67,5 +67,6 @@ const messageDeliverySchema = new mongoose.Schema(
 
 // Auto-clean delivery metadata to keep storage bounded.
 messageDeliverySchema.index({expiresAt: 1}, {expireAfterSeconds: 0});
+messageDeliverySchema.index({conversationId: 1, messageTimestamp: 1});
 
 module.exports = mongoose.model('MessageDelivery', messageDeliverySchema);

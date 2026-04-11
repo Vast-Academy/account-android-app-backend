@@ -8,6 +8,8 @@ const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
 const {
   applyInstalledTokenState,
+  detachTokenForUser,
+  detachTokenFromOtherUsers,
   releaseExpiredPhoneOwnerships,
   getEffectivePhoneOwnershipState,
   isInvalidFcmTokenError,
@@ -552,8 +554,19 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     if (currency) user.currencySymbol = currency;
     if (setupComplete !== undefined) user.setupComplete = setupComplete;
     if (fcmToken) {
+      const normalizedToken = String(fcmToken).trim();
+      const detached = await detachTokenFromOtherUsers(normalizedToken, firebaseUid, {
+        reason: 'token_reassigned_update_profile',
+      });
+      if (detached.modifiedCount > 0) {
+        console.log('[TOKEN_OWNERSHIP][REASSIGNED_UPDATE_PROFILE]', {
+          ownerUid: firebaseUid,
+          detachedCount: detached.modifiedCount,
+          tokenSuffix: normalizedToken.slice(-8),
+        });
+      }
       applyInstalledTokenState(user, {
-        token: fcmToken,
+        token: normalizedToken,
         seenAt: new Date(),
       });
     }
@@ -912,7 +925,33 @@ router.post('/phone-claims/respond', verifyToken, async (req, res) => {
 });
 
 router.post('/logout', verifyToken, async (req, res) => {
-  return res.status(200).json({ success: true, message: 'Logout successful' });
+  try {
+    const uid = String(req.user?.uid || '').trim();
+    if (!uid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user',
+      });
+    }
+    const detached = await detachTokenForUser(uid, {
+      reason: 'logout_token_detached',
+    });
+    console.log('[TOKEN_OWNERSHIP][LOGOUT_DETACH]', {
+      uid,
+      detachedCount: detached.modifiedCount,
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'Logout successful',
+      detachedCount: detached.modifiedCount,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Logout failed',
+      error: error.message,
+    });
+  }
 });
 
 module.exports = router;
