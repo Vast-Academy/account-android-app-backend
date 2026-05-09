@@ -380,4 +380,30 @@ router.get('/token-health', verifyToken, async (req, res) => {
   }
 });
 
+router.get('/:userId/install-status', verifyToken, async (req, res) => {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'userId is required' });
+    }
+
+    const user = await User.findOne({ firebaseUid: userId })
+      .select('firebaseUid fcmToken appInstallState')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      userId: user.firebaseUid,
+      appInstallState: user.appInstallState || 'installed',
+      hasToken: !!user.fcmToken,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
