@@ -406,16 +406,4 @@ router.get('/:userId/install-status', verifyToken, async (req, res) => {
   }
 });
 
-router.get('/bootstrap', verifyToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    return res.status(200).json({ success: true, user });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: 'Failed to fetch user', error: error.message });
-  }
-});
-
 module.exports = router;
