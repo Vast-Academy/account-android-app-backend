@@ -7,10 +7,14 @@ const {
   isInvalidFcmTokenError,
   markUserAsUninstalled,
 } = require('../services/fcmTokenState');
-const {
-  getContactByDualPath,
-  normalizePhoneForLookup,
-} = require('../services/contactReconciliationService');
+const normalizePhoneForLookup = value => {
+  if (!value) return '';
+  const digits = String(value).replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.length > 10) return digits.slice(-10);
+  if (digits.length < 8) return '';
+  return digits;
+};
 
 const normalizeOp = (value) => {
   return value === 'delete' || value === 'update' ? value : 'create';
@@ -111,10 +115,12 @@ router.post('/sync', verifyToken, async (req, res) => {
       receiver = await User.findOne({ firebaseUid: String(peerUserId) }).lean();
     }
 
-    // Step 3: Try by normalized phone as dual-path fallback
+    // Step 3: Try by normalized phone as fallback
     if (!receiver) {
-      console.log('🔍 [LEDGER_SSOT] FirebaseUid lookup failed, trying dual-path lookup');
-      receiver = await getContactByDualPath(peerUserId, peerUserId);
+      const normalizedPhone = normalizePhoneForLookup(peerUserId);
+      if (normalizedPhone) {
+        receiver = await User.findOne({ mobileNormalized: normalizedPhone }).lean();
+      }
     }
 
     // Step 4: MongoDB _id fallback (if valid ObjectID)
