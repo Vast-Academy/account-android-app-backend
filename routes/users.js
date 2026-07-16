@@ -9,9 +9,6 @@ const {
   PHONE_RECLAIM_GRACE_MINUTES,
   detachTokenFromOtherUsers,
 } = require('../services/fcmTokenState');
-const {
-  reconcileContactsOnAppInstall,
-} = require('../services/contactReconciliationService');
 
 const normalizePhoneForLookup = value => {
   if (!value) return '';
@@ -230,8 +227,6 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
         appState: user.appInstallState,
       });
 
-      const reconcileResult = await reconcileContactsOnAppInstall(firebaseUid, nextFullPhone);
-      console.log('[SSOT_RECONCILE] Result:', reconcileResult);
     }
 
     return res.status(200).json({
