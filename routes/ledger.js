@@ -7,6 +7,10 @@ const {
   isInvalidFcmTokenError,
   markUserAsUninstalled,
 } = require('../services/fcmTokenState');
+const {
+  getContactByDualPath,
+  normalizePhoneForLookup,
+} = require('../services/contactReconciliationService');
 
 const normalizeOp = (value) => {
   return value === 'delete' || value === 'update' ? value : 'create';
@@ -94,32 +98,48 @@ router.post('/sync', verifyToken, async (req, res) => {
       });
     }
 
-    // Step 1: Try username lookup first (new approach)
-    let receiver = await User.findOne({ username: peerUserId.toLowerCase() }).lean();
+    // SSOT: Dual-path lookup (username → firebaseUid → phone)
+    let receiver = null;
 
-    // Step 2: Fallback to firebaseUid (for legacy queued events)
+    // Step 1: Try username lookup first
+    receiver = await User.findOne({ username: peerUserId.toLowerCase() }).lean();
+
     if (!receiver) {
-      console.log('🔍 [LEDGER] Username lookup failed, trying firebaseUid:', peerUserId);
+      console.log('🔍 [LEDGER_SSOT] Username lookup failed:', peerUserId);
+
+      // Step 2: Try firebaseUid
       receiver = await User.findOne({ firebaseUid: String(peerUserId) }).lean();
     }
 
-    // Step 3: Fallback to MongoDB _id (if valid ObjectID)
+    // Step 3: Try by normalized phone as dual-path fallback
+    if (!receiver) {
+      console.log('🔍 [LEDGER_SSOT] FirebaseUid lookup failed, trying dual-path lookup');
+      receiver = await getContactByDualPath(peerUserId, peerUserId);
+    }
+
+    // Step 4: MongoDB _id fallback (if valid ObjectID)
     if (!receiver && isMongoObjectId(peerUserId)) {
-      console.log('🔍 [LEDGER] FirebaseUid lookup failed, trying MongoDB ID:', peerUserId);
+      console.log('🔍 [LEDGER_SSOT] Trying MongoDB ID:', peerUserId);
       try {
         receiver = await User.findOne({ _id: String(peerUserId) }).lean();
       } catch (e) {
-        console.log('🔍 [LEDGER] MongoDB ID lookup also failed');
+        console.log('🔍 [LEDGER_SSOT] MongoDB ID lookup failed');
       }
     }
 
     if (!receiver) {
-      console.error('❌ [LEDGER] Receiver not found:', peerUserId);
+      console.error('❌ [LEDGER_SSOT] Receiver not found with SSOT:', peerUserId);
       return res.status(404).json({
         success: false,
         message: 'Receiver not found',
       });
     }
+
+    console.log('✅ [LEDGER_SSOT] Receiver found:', {
+      firebaseUid: receiver.firebaseUid,
+      phone: receiver.mobileNormalized,
+      username: receiver.username,
+    });
 
     const sender = await User.findOne({ firebaseUid: String(sourceUserId) })
       .select('displayName username mobile mobileNormalized')
@@ -138,6 +158,7 @@ router.post('/sync', verifyToken, async (req, res) => {
       sender?.mobileNormalized || sender?.mobile || ''
     ).trim();
 
+    // SSOT: Include both firebaseUid and phone for dual-path resolution
     const eventData = {
       type: 'ledger_event',
       op: String(opValue),
@@ -145,7 +166,8 @@ router.post('/sync', verifyToken, async (req, res) => {
       sourceUserId: String(sourceUserId),
       sourceUserName: senderTitle,
       sourceUserPhone,
-      peerUserId: String(peerUserId),
+      peerUserId: String(receiver.firebaseUid), // Use firebaseUid as primary
+      peerUserPhone: String(receiver.mobileNormalized || receiver.mobile || ''), // Add phone as secondary
       entryType: String(entryTypeValue),
       amount: String(amountValue),
       note: String(note || ''),
@@ -157,6 +179,9 @@ router.post('/sync', verifyToken, async (req, res) => {
       ),
       version: String(Number(version || 1)),
       contactRecordId: String(contactRecordId || ''),
+      // SSOT tracking
+      ssotResolution: 'backend_dual_path',
+      receiverAppState: receiver.appInstallState,
     };
 
     const amountLabel = 'Rs ' + Number(amountValue).toLocaleString('en-IN');

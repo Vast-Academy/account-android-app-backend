@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "migrate:token-dedupe:dry": "node scripts/token-dedupe-migration.js",
+    "migrate:token-dedupe:apply": "node scripts/token-dedupe-migration.js --apply",
+    "migrate:token-dedupe:oneclick:dry": "powershell -ExecutionPolicy Bypass -File scripts/run-token-dedupe.ps1",
+    "migrate:token-dedupe:oneclick:apply": "powershell -ExecutionPolicy Bypass -File scripts/run-token-dedupe.ps1 -Apply"
   },
   "dependencies": {
     "express": "^4.18.2",
