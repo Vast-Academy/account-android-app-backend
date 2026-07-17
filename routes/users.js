@@ -218,17 +218,6 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
 
     await syncPhoneLinks(firebaseUid, nextFullPhone, prevNormalized);
 
-    // SSOT: Trigger reconciliation when user updates profile with phone
-    // This handles the case where a non-app user becomes an app user
-    if (nextNormalized && profileToken) {
-      console.log('[SSOT_RECONCILE] Attempting contact reconciliation:', {
-        firebaseUid,
-        phone: nextNormalized,
-        appState: user.appInstallState,
-      });
-
-    }
-
     return res.status(200).json({
       success: true,
       message: 'Profile synced successfully',
