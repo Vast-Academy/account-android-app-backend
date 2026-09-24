@@ -4,6 +4,10 @@ const User = require('../models/User');
 const PhoneLink = require('../models/PhoneLink');
 const { verifyToken } = require('../middleware/authMiddleware');
 const {
+  buildBootstrapPayload,
+  buildCanonicalUser,
+} = require('../services/canonicalUser');
+const {
   applyInstalledTokenState,
   releaseExpiredPhoneOwnerships,
   PHONE_RECLAIM_GRACE_MINUTES,
@@ -221,7 +225,11 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile synced successfully',
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to sync profile', error: error.message });
@@ -412,7 +420,7 @@ router.get('/bootstrap', verifyToken, async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    return res.status(200).json({ success: true, user });
+    return res.status(200).json(buildBootstrapPayload(user));
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch user', error: error.message });
   }

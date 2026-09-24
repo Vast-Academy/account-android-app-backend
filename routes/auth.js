@@ -7,6 +7,10 @@ const PhoneClaim = require('../models/PhoneClaim');
 const admin = require('../config/firebase');
 const { verifyToken } = require('../middleware/authMiddleware');
 const {
+  buildBootstrapPayload,
+  buildCanonicalUser,
+} = require('../services/canonicalUser');
+const {
   applyInstalledTokenState,
   detachTokenForUser,
   detachTokenFromOtherUsers,
@@ -225,7 +229,11 @@ router.post('/google-signin', async (req, res) => {
     return res.status(200).json({
       success: true,
       setupComplete: user.setupComplete,
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Authentication failed', error: error.message });
@@ -280,7 +288,15 @@ router.post('/complete-setup', async (req, res) => {
     user.searchableTerms = generateSearchableTerms(user);
     await user.save();
 
-    return res.status(200).json({ success: true, message: 'Setup completed successfully', user });
+    return res.status(200).json({
+      success: true,
+      message: 'Setup completed successfully',
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to complete setup', error: error.message });
   }
@@ -306,7 +322,15 @@ router.post('/login', async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
 
-    return res.status(200).json({ success: true, message: 'Login successful', user });
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Login failed', error: error.message });
   }
@@ -318,7 +342,7 @@ router.get('/user', verifyToken, async (req, res) => {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    return res.status(200).json({ success: true, user });
+    return res.status(200).json(buildBootstrapPayload(user));
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch user details', error: error.message });
   }
@@ -587,7 +611,11 @@ router.put('/update-profile', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      user,
+      user: buildCanonicalUser(user, {
+        includeMongoId: true,
+        includeEmail: true,
+        includePrivatePhone: true,
+      }),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to update profile', error: error.message });
