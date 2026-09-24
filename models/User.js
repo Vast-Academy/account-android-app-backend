@@ -24,6 +24,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  mobileNormalized: {
+    type: String,
+    default: null
+  },
   gender: {
     type: String,
     enum: ['Male', 'Female', 'Other'],
@@ -41,31 +45,82 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  googleDriveConnected: {
-    type: Boolean,
-    default: false
+  country: {
+    type: String,
+    default: null
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  lastLogin: {
-    type: Date,
-    default: Date.now
-  },
-  // Chat Feature Fields
   username: {
     type: String,
-    lowercase: true,
-    sparse: true
+    lowercase: true
+  },
+  fcmToken: {
+    type: String,
+    default: null
+  },
+  appInstallState: {
+    type: String,
+    enum: ['installed', 'uninstalled'],
+    default: 'installed'
+  },
+  phoneOwnershipState: {
+    type: String,
+    enum: ['active', 'reclaimable', 'released'],
+    default: 'released'
+  },
+  phoneReclaimMarkedAt: {
+    type: Date,
+    default: null
+  },
+  phoneReleaseAfter: {
+    type: Date,
+    default: null
+  },
+  fcmTokenUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  lastTokenSeenAt: {
+    type: Date,
+    default: null
+  },
+  lastAuditAt: {
+    type: Date,
+    default: null
+  },
+  lastAuditResult: {
+    type: String,
+    default: null
+  },
+  fcmTokenStatus: {
+    type: String,
+    enum: ['unknown', 'ok', 'error'],
+    default: 'unknown'
+  },
+  fcmTokenLastError: {
+    type: String,
+    default: null
+  },
+  fcmTokenPlatform: {
+    type: String,
+    default: null
+  },
+  fcmTokenDeviceId: {
+    type: String,
+    default: null
+  },
+  fcmTokenAppVersion: {
+    type: String,
+    default: null
   },
   searchableTerms: {
     type: [String],
-    default: []
+    default: [],
+    index: true
   },
-  tumneToken: {
+  bio: {
     type: String,
-    default: null
+    default: null,
+    maxlength: 150
   },
   isOnline: {
     type: Boolean,
@@ -73,7 +128,7 @@ const userSchema = new mongoose.Schema({
   },
   lastOnline: {
     type: Date,
-    default: Date.now
+    default: null
   },
   privacy: {
     phoneNumberVisible: {
@@ -88,12 +143,37 @@ const userSchema = new mongoose.Schema({
       type: Boolean,
       default: true
     }
+  },
+  googleDriveConnected: {
+    type: Boolean,
+    default: false
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  lastLogin: {
+    type: Date,
+    default: Date.now
   }
 });
 
-// Create indexes for chat search
-userSchema.index({ username: 1 });
-userSchema.index({ searchableTerms: 1 });
-userSchema.index({ phoneNumber: 1 });
+// Enforce uniqueness only when username is a real string (not null/empty)
+userSchema.index(
+  { username: 1 },
+  { unique: true, partialFilterExpression: { username: { $type: 'string', $ne: '' } } }
+);
+
+// Enforce uniqueness for active normalized phone values.
+userSchema.index(
+  { mobileNormalized: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { mobileNormalized: { $type: 'string', $ne: '' } } }
+);
+
+// Fast token ownership lookup for reassignment/detach flows.
+userSchema.index(
+  { fcmToken: 1 },
+  { sparse: true, partialFilterExpression: { fcmToken: { $type: 'string', $ne: '' } } }
+);
 
 module.exports = mongoose.model('User', userSchema);

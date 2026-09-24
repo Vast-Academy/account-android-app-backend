@@ -4,10 +4,6 @@ const User = require('../models/User');
 const PhoneLink = require('../models/PhoneLink');
 const { verifyToken } = require('../middleware/authMiddleware');
 const {
-  buildBootstrapPayload,
-  buildCanonicalUser,
-} = require('../services/canonicalUser');
-const {
   applyInstalledTokenState,
   releaseExpiredPhoneOwnerships,
   PHONE_RECLAIM_GRACE_MINUTES,
@@ -225,11 +221,7 @@ router.post('/sync-profile', verifyToken, async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile synced successfully',
-      user: buildCanonicalUser(user, {
-        includeMongoId: true,
-        includeEmail: true,
-        includePrivatePhone: true,
-      }),
+      user,
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to sync profile', error: error.message });
@@ -385,44 +377,6 @@ router.get('/token-health', verifyToken, async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.get('/:userId/install-status', verifyToken, async (req, res) => {
-  try {
-    const userId = String(req.params.userId || '').trim();
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'userId is required' });
-    }
-
-    const user = await User.findOne({ firebaseUid: userId })
-      .select('firebaseUid fcmToken appInstallState')
-      .lean();
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    return res.status(200).json({
-      success: true,
-      userId: user.firebaseUid,
-      appInstallState: user.appInstallState || 'installed',
-      hasToken: !!user.fcmToken,
-    });
-  } catch (error) {
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-router.get('/bootstrap', verifyToken, async (req, res) => {
-  try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    return res.status(200).json(buildBootstrapPayload(user));
-  } catch (error) {
-    return res.status(500).json({ success: false, message: 'Failed to fetch user', error: error.message });
   }
 });
 
