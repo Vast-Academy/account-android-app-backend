@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { runFcmTokenAudit } = require('../services/fcmTokenAuditService');
+const {dispatchBatch} = require('../services/deliveryService');
 
 const verifyCronSecret = (req, res, next) => {
   const expected = String(process.env.CRON_SECRET || '').trim();
@@ -35,6 +36,14 @@ router.get('/fcm-token-audit', verifyCronSecret, async (req, res) => {
       message: 'FCM token audit failed',
       error: error.message,
     });
+  }
+});
+
+router.post('/delivery-dispatch', verifyCronSecret, async (req, res) => {
+  try {
+    return res.json({success: true, ...await dispatchBatch()});
+  } catch (_) {
+    return res.status(503).json({success: false, message: 'Delivery dispatch failed'});
   }
 });
 
