@@ -5,6 +5,11 @@ const admin = require('../config/firebase');
 const {isInvalidFcmTokenError} = require('./fcmTokenState');
 
 const pendingStatuses = ['accepted', 'pushed', 'failed'];
+// Re-push stops here (~25 min of backoff); the row stays pending, so the
+// receiver still recovers it from /inbox on its next app start or reconnect.
+const MAX_PUSH_ATTEMPTS = 10;
+// Fits one dispatch pass inside a short serverless invocation.
+const DISPATCH_BUDGET_MS = 8000;
 const statusPredecessors = {
   pushed: ['accepted', 'failed'],
   delivered: ['accepted', 'pushed', 'failed'],
@@ -78,6 +83,8 @@ async function dispatchOne(messageId) {
   const leaseId = randomUUID();
   const row = await Delivery.findOneAndUpdate({
     ...(messageId ? {messageId} : {}), status: {$in: pendingStatuses},
+    // $not also matches legacy rows that have no retryCount field.
+    retryCount: {$not: {$gte: MAX_PUSH_ATTEMPTS}},
     $and: [{$or: [{nextPushAt: {$lte: now}}, {nextPushAt: null}]},
       {$or: [{leaseUntil: {$lte: now}}, {leaseUntil: null}]}],
   }, {$set: {leaseId, leaseUntil: new Date(Date.now() + 60000)}},
@@ -123,7 +130,7 @@ async function dispatchOne(messageId) {
   return true;
 }
 
-async function dispatchBatch({limit = 50, budgetMs = 20000} = {}) {
+async function dispatchBatch({limit = 50, budgetMs = DISPATCH_BUDGET_MS} = {}) {
   const deadline = Date.now() + budgetMs;
   let count = 0;
   while (count < limit && Date.now() < deadline && await dispatchOne()) count++;
@@ -145,4 +152,4 @@ async function relayReceipt(row) {
 }
 
 module.exports = {acceptDelivery, advanceStatus, deliveryPayload, dispatchOne,
-  dispatchBatch, relayReceipt, eventKey, fail};
+  dispatchBatch, relayReceipt, eventKey, fail, MAX_PUSH_ATTEMPTS};

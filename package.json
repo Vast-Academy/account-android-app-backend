@@ -12,16 +12,17 @@
     "migrate:token-dedupe:oneclick:apply": "powershell -ExecutionPolicy Bypass -File scripts/run-token-dedupe.ps1 -Apply"
   },
   "dependencies": {
+    "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "firebase-admin": "^12.0.0",
-    "mongoose": "^8.0.3",
-    "dotenv": "^16.3.1",
-    "cors": "^2.8.5",
-    "body-parser": "^1.20.2",
-    "bcrypt": "^5.1.1",
-    "libphonenumber-js": "^1.12.36"
+    "libphonenumber-js": "^1.12.36",
+    "mongoose": "^8.0.3"
   },
   "devDependencies": {
+    "mongodb-memory-server": "^10.4.3",
     "nodemon": "^3.0.2"
   }
 }

@@ -1,11 +1,6 @@
 const {test, before, after} = require('node:test');
 const assert = require('node:assert/strict');
-const {spawn} = require('node:child_process');
-const {mkdtempSync} = require('node:fs');
-const {tmpdir} = require('node:os');
-const path = require('node:path');
-const net = require('node:net');
-const {setTimeout: delay} = require('node:timers/promises');
+const {MongoMemoryServer} = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 let mongo;
 let push = async () => 'push-id';
@@ -21,37 +16,17 @@ const envelope = id => ({messageId: id, conversationId: 'A_B', senderId: 'A', re
   payload: {type: 'chat_message', messageId: id, receiverId: 'B', messageText: 'hello'}});
 
 before(async () => {
-  const probe = net.createServer();
-  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
-  const port = probe.address().port;
-  await new Promise(resolve => probe.close(resolve));
-  const dbpath = mkdtempSync(path.join(tmpdir(), 'savingo-mongo-test-'));
-  const binary = process.env.TEST_MONGOD || 'C:\\Program Files\\MongoDB\\Server\\8.3\\bin\\mongod.exe';
-  mongo = spawn(binary, ['--dbpath', dbpath, '--bind_ip', '127.0.0.1', '--port', String(port),
-    '--logpath', path.join(dbpath, 'mongod.log')], {windowsHide: true, stdio: 'ignore'});
-  let spawnError;
-  mongo.on('error', error => {spawnError = error;});
-  for (let attempt = 0; attempt < 30; attempt++) {
-    if (spawnError) throw spawnError;
-    try {
-      await mongoose.connect(`mongodb://127.0.0.1:${port}/delivery_test`, {serverSelectionTimeoutMS: 500});
-      break;
-    } catch (error) {
-      if (attempt === 29) throw error;
-      await delay(200);
-    }
-  }
-  await Promise.all([Delivery.init(), User.init()]);
+  // Isolated throwaway mongod; never point these tests at a real database.
+  mongo = await MongoMemoryServer.create();
+  await mongoose.connect(mongo.getUri('delivery_test'));
+  // User's partial $ne indexes are rejected by mongod; delivery tests need only its collection.
+  await Promise.all([Delivery.init(), User.createCollection()]);
   await User.create({firebaseUid: 'B', email: 'b@example.test', displayName: 'B',
     fcmToken: 'old-token', mobileNormalized: '+911234567890', phoneOwnershipState: 'active'});
 });
 after(async () => {
   await mongoose.disconnect();
-  if (mongo && mongo.exitCode === null) {
-    const exited = new Promise(resolve => mongo.once('exit', resolve));
-    mongo.kill();
-    await exited;
-  }
+  if (mongo) await mongo.stop();
 });
 
 test('concurrent identical sends produce one durable record and retry obligation', async () => {
@@ -104,6 +79,23 @@ test('missing token retains message without expiry and waits for retry', async (
   assert.equal(row.status, 'accepted');
   assert.equal(row.expiresAt, null);
   assert.equal(row.lastError, 'push_token_missing');
+});
+test('re-push stops after the attempt cap while the message stays in the inbox', async () => {
+  await User.updateOne({firebaseUid: 'B'}, {$set: {fcmToken: 'live-token'}});
+  push = async () => { throw Object.assign(new Error('unavailable'), {code: 'messaging/unavailable'}); };
+  try {
+    await service.acceptDelivery(envelope('capped'));
+    const due = () => Delivery.updateOne({messageId: 'capped'}, {$set: {nextPushAt: new Date(0)}});
+    for (let attempt = 1; attempt <= service.MAX_PUSH_ATTEMPTS; attempt++) {
+      await due();
+      assert.equal(await service.dispatchOne('capped'), true);
+    }
+    await due();
+    assert.equal(await service.dispatchOne('capped'), false);
+    const row = await Delivery.findOne({messageId: 'capped'}).lean();
+    assert.equal(row.retryCount, service.MAX_PUSH_ATTEMPTS);
+    assert.equal(row.status, 'accepted');
+  } finally { push = async () => 'push-id'; }
 });
 test('inbox and status routes isolate accounts and recover missing receipt pushes', async () => {
   const express = require('express');
