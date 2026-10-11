@@ -8,10 +8,6 @@ const respondError = (res, error) => res.status(error.statusCode || 500).json({
   success: false, message: error.statusCode ? error.message : 'Delivery service unavailable',
 });
 router.post('/send', verifyToken, async (req, res) => {
-  // TEMP Phase 0 send-latency measurement; remove after measurement.
-  const sendStartedAt = Date.now();
-  const timings = {};
-  const lap = name => { timings[name] = Date.now() - sendStartedAt; };
   try {
     const senderId = String(req.user.uid);
     const {conversationId, receiverId, messageId, messageText, timestamp} = req.body || {};
@@ -22,12 +18,13 @@ router.post('/send', verifyToken, async (req, res) => {
         !Number.isSafeInteger(Number(timestamp)) || Number(timestamp) <= 0) {
       throw fail(400, 'Invalid message identity, content or timestamp');
     }
-    const receiver = await User.findOne({firebaseUid: receiverId}).select('firebaseUid').lean();
-    lap('receiverLookupMs');
+    // Independent reads run together; the receiver's token is reused by dispatch.
+    const [receiver, sender] = await Promise.all([
+      User.findOne({firebaseUid: receiverId}).select('firebaseUid fcmToken').lean(),
+      User.findOne({firebaseUid: senderId})
+        .select('displayName username mobileNormalized mobile').lean(),
+    ]);
     if (!receiver) throw fail(404, 'Receiver not found');
-    const sender = await User.findOne({firebaseUid: senderId})
-      .select('displayName username mobileNormalized mobile').lean();
-    lap('senderLookupMs');
     const payload = {
       type: 'chat_message', messageId, conversationId, senderId, receiverId,
       messageText: messageText.trim(), messageType: String(req.body.messageType || 'text'),
@@ -38,18 +35,16 @@ router.post('/send', verifyToken, async (req, res) => {
     const row = await acceptDelivery({messageId, conversationId, senderId, receiverId,
       messageText: payload.messageText, messageTimestamp: Number(timestamp), kind: 'chat',
       contentKey: payload.messageType, payload});
-    lap('acceptMs');
-    const dispatchTimings = {};
+    const dispatch = {};
     // Await immediate dispatch; a separate durable worker owns retries.
-    try { await dispatchOne(messageId, dispatchTimings); } catch (_) { /* inbox remains durable */ }
-    lap('dispatchMs');
-    const current = await Delivery.findOne({messageId}).select('status').lean();
-    lap('finalReadMs');
-    timings.dispatch = dispatchTimings;
-    console.log('[SEND_TIMING]', JSON.stringify({messageId, ...timings}));
-    return res.json({success: true, messageId, status: current?.status || row.status,
-      durable: true, protocolVersion: 2, queued: !['delivered', 'read'].includes(current?.status),
-      timings});
+    try {
+      await dispatchOne(messageId, {receiverToken: receiver.fcmToken || null, result: dispatch});
+    } catch (_) { /* inbox remains durable */ }
+    // Client status ranks never move backwards, so a receipt that raced ahead
+    // of this response is not overwritten by 'pushed'.
+    const status = dispatch.pushed ? 'pushed' : row.status;
+    return res.json({success: true, messageId, status,
+      durable: true, protocolVersion: 2, queued: !['delivered', 'read'].includes(status)});
   } catch (error) { return respondError(res, error); }
 });
 router.post('/delivery-receipt', verifyToken, async (req, res) => {
