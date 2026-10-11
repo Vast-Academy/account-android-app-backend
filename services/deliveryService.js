@@ -78,7 +78,10 @@ function deliveryPayload(row) {
     timestamp: String(row.messageTimestamp), eventId: row.messageId, notifVersion: 'v3'};
 }
 
-async function dispatchOne(messageId) {
+async function dispatchOne(messageId, timings = null) {
+  // TEMP Phase 0 send-latency measurement; remove after measurement.
+  const startedAt = Date.now();
+  const mark = name => { if (timings) timings[name] = Date.now() - startedAt; };
   const now = new Date();
   const leaseId = randomUUID();
   const row = await Delivery.findOneAndUpdate({
@@ -89,6 +92,7 @@ async function dispatchOne(messageId) {
       {$or: [{leaseUntil: {$lte: now}}, {leaseUntil: null}]}],
   }, {$set: {leaseId, leaseUntil: new Date(Date.now() + 60000)}},
   {new: true, sort: {nextPushAt: 1, _id: 1}}).lean();
+  mark('lockMs');
   if (!row) return false;
   let token;
   let pushed = false;
@@ -96,6 +100,7 @@ async function dispatchOne(messageId) {
   try {
     const receiver = await User.findOne({firebaseUid: row.receiverId}).select('fcmToken').lean();
     token = receiver?.fcmToken;
+    mark('tokenLookupMs');
     if (!token) {
       lastError = 'push_token_missing';
     } else {
@@ -108,6 +113,7 @@ async function dispatchOne(messageId) {
         : data;
       await admin.messaging().send({token, data: pushData, android: {priority: 'high'}});
       pushed = true;
+      mark('fcmSendMs');
     }
   } catch (error) {
     lastError = String(error.code || 'push_failed').slice(0, 100);
@@ -127,6 +133,7 @@ async function dispatchOne(messageId) {
   await Delivery.updateOne({_id: row._id, leaseId, status: {$in: pendingStatuses}}, {
     $set: state, $inc: {retryCount: 1},
   });
+  mark('statusUpdateMs');
   return true;
 }
 
